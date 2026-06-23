@@ -29,4 +29,7 @@ plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# Keep every async fixture function-scoped (avoids cross-loop "different loop" errors
+# with asyncpg — see global memory pytest-asyncio-loop-scope).
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
