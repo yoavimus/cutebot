@@ -1,0 +1,44 @@
+# CuteBot brand guidelines — copy to brand.yaml and edit.
+# This file is the single source the copywriter reads each generation batch.
+# Keep it tight and specific; it is injected into the LLM prompt verbatim.
+
+name: "Acme Plushies"
+one_liner: "Handmade, ethically-sourced plush toys for grown-ups who never grew up."
+
+# Voice & tone — the most important section. Be concrete.
+voice:
+  - "Warm, playful, a little cheeky — never corporate."
+  - "Short sentences. Lowercase-friendly. Emoji used sparingly (1–2 max)."
+  - "Speak to the reader as a friend, not a customer."
+
+# Hard rules the copywriter must never violate.
+do_not:
+  - "No exclamation-point spam (max one per caption)."
+  - "Never use the words 'synergy', 'leverage', or 'unlock'."
+  - "No fake scarcity or urgency ('only 2 left!!')."
+
+# Recurring themes / pillars to rotate through.
+pillars:
+  - "Behind-the-scenes of how a plush is made."
+  - "Customer stories and unboxings."
+  - "Gentle, cozy, slice-of-life moments."
+
+# Audience.
+audience: "25–40, nostalgic, design-conscious, values craft and ethics."
+
+# Visual direction for the matching image concept.
+visual_style:
+  - "Soft natural light, warm cream and pastel palette."
+  - "Real textures — yarn, wood, linen. No stocky studio shots."
+  - "One hero subject per frame."
+
+# Networks this brand publishes to (must match a registered publisher).
+networks:
+  - instagram
+  - tiktok
+  - x
+
+# Example posts the brand is proud of — few-shot anchors for style.
+examples:
+  - "meet pip. he's been sitting in the workshop window all week, judging our coffee intake. (worth it.) 🧵"
+  - "every stitch is done by hand, which is a fancy way of saying we drink a lot of tea while we work."

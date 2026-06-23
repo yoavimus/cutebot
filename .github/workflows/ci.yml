@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: Lint · Type · Test
+    runs-on: ubuntu-latest
+
+    env:
+      # Tests run against in-memory SQLite — no DB service needed.
+      DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+      APP_ENV: test
+      DEFAULT_LLM_MODEL: "anthropic/claude-sonnet-4-6"
+      ANTHROPIC_API_KEY: "sk-ci-placeholder"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Lint (ruff)
+        run: python -m ruff check .
+
+      - name: Type check (mypy)
+        run: python -m mypy app
+
+      - name: Test
+        run: python -m pytest -v

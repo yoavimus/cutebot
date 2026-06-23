@@ -1,0 +1,32 @@
+[project]
+name = "cutebot"
+version = "0.1.0"
+description = "Autonomous human-in-the-loop social-media content pipeline for small brands."
+requires-python = ">=3.12"
+readme = "README.md"
+license = { text = "MIT" }
+
+# Runtime deps are pinned in requirements.txt (single source for pip/CI).
+# Keep the two in sync when adding a library (see DEV_GUIDELINES: refactor responsibly).
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI dependency-injection idiom: these calls in argument defaults are intended.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Header"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+disallow_untyped_defs = true
+warn_unused_ignores = true
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
