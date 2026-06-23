@@ -40,13 +40,27 @@ Return a JSON object of this exact shape:
 """
 
 
-def _has_provider_key() -> bool:
+def _provider_key() -> str | None:
+    """The API key for the configured provider, or None if not set.
+
+    LiteLLM reads keys from ``os.environ`` only — pydantic-settings loads them into the
+    ``Settings`` object, not the environment — so we pass the key explicitly to
+    ``acompletion`` rather than relying on env lookup.
+    """
     s = get_settings()
     model = s.default_llm_model
     if model.startswith("anthropic/"):
-        return bool(s.anthropic_api_key)
+        return s.anthropic_api_key or None
     if model.startswith("openai/") or model.startswith("gpt"):
-        return bool(s.openai_api_key)
+        return s.openai_api_key or None
+    return None
+
+
+def _has_provider_key() -> bool:
+    s = get_settings()
+    model = s.default_llm_model
+    if model.startswith(("anthropic/", "openai/", "gpt")):
+        return _provider_key() is not None
     # Unknown provider — assume the env is configured for it.
     return True
 
@@ -82,6 +96,9 @@ async def generate_suggestions(brand: str, n: int) -> list[PostSuggestion]:
         messages=messages,
         response_format={"type": "json_object"},
         max_tokens=2000,
+        # LiteLLM only reads keys from os.environ; pass explicitly since pydantic-settings
+        # loads them into Settings, not the environment.
+        api_key=_provider_key(),
     )
     content = response["choices"][0]["message"]["content"]
     data = json.loads(content)
