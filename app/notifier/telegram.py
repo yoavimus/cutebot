@@ -12,6 +12,7 @@ Run modes (CLI):
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import sys
 
@@ -19,10 +20,13 @@ import httpx
 
 from app.config import Settings, get_settings
 from app.models import Post
+from app.render import image_path, render_full_caption
 
 logger = logging.getLogger(__name__)
 
 _API = "https://api.telegram.org/bot{token}/{method}"
+# Telegram photo captions are capped at 1024 chars; longer captions go in a follow-up text.
+_PHOTO_CAPTION_LIMIT = 1024
 
 
 class TelegramNotifier:
@@ -38,12 +42,8 @@ class TelegramNotifier:
         if not self._settings.telegram_bot_token or not self._settings.telegram_chat_id:
             logger.warning("Telegram not configured — skipping send for post %s.", post.id)
             return
-        text = (
-            f"🆕 *Post suggestion #{post.id}*\n\n"
-            f"{post.caption}\n\n"
-            f"🎨 _{post.visual_concept}_\n\n"
-            f"💡 {post.rationale}"
-        )
+        caption = render_full_caption(post, self._settings)
+        photo_path = image_path(post, self._settings)
         keyboard = {
             "inline_keyboard": [
                 [
@@ -53,15 +53,32 @@ class TelegramNotifier:
             ]
         }
         async with httpx.AsyncClient(timeout=15) as client:
-            await client.post(
-                self._url("sendMessage"),
-                json={
-                    "chat_id": self._settings.telegram_chat_id,
-                    "text": text,
-                    "parse_mode": "Markdown",
-                    "reply_markup": keyboard,
-                },
-            )
+            if len(caption) <= _PHOTO_CAPTION_LIMIT:
+                await client.post(
+                    self._url("sendPhoto"),
+                    data={
+                        "chat_id": self._settings.telegram_chat_id,
+                        "caption": caption,
+                        "reply_markup": json.dumps(keyboard),
+                    },
+                    files={"photo": photo_path.read_bytes()},
+                )
+            else:
+                # Caption too long for a photo caption — send the photo bare, then the full
+                # text with the controls, so the buttons always sit with the full caption.
+                await client.post(
+                    self._url("sendPhoto"),
+                    data={"chat_id": self._settings.telegram_chat_id},
+                    files={"photo": photo_path.read_bytes()},
+                )
+                await client.post(
+                    self._url("sendMessage"),
+                    json={
+                        "chat_id": self._settings.telegram_chat_id,
+                        "text": caption,
+                        "reply_markup": keyboard,
+                    },
+                )
 
     async def answer_callback(self, callback_query_id: str, text: str) -> None:
         async with httpx.AsyncClient(timeout=15) as client:

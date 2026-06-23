@@ -68,6 +68,17 @@ pytest -v             # verbose
 ## Database
 
 ```bash
-# Tables are created on app startup (dev). For prod, add an Alembic migration
-# before introducing new columns (see DEV_GUIDELINES: refactor responsibly).
+# Tables are created on app startup (dev, via init_db()/create_all). For prod,
+# Alembic owns the schema — add a migration before introducing new columns
+# (see DEV_GUIDELINES: refactor responsibly).
+
+# Generate a migration from model changes (autogenerate diffs against the DB at
+# DATABASE_URL):
+alembic revision --autogenerate -m "describe the change"
+
+# Apply pending migrations:
+alembic upgrade head
+
+# Check for drift between models and the latest migration (dry-run, no DB write):
+alembic check
 ```

@@ -11,7 +11,9 @@ import logging
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+from app.config import get_settings
 from app.models import Post
+from app.render import render_full_caption
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +41,14 @@ class _LoggingStubPublisher:
     name = "stub"
 
     async def publish(self, post: Post) -> PublishResult:
-        logger.info("[%s] would publish post #%s: %s", self.name, post.id, post.caption)
+        caption = render_full_caption(post, get_settings())
+        logger.info(
+            "[%s] would publish post #%s (image=%s): %s",
+            self.name,
+            post.id,
+            post.image_ref,
+            caption,
+        )
         return PublishResult(network=self.name, ok=True, detail="stub: logged, not sent")
 
 

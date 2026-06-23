@@ -51,7 +51,9 @@ class Post(Base):
     __tablename__ = "posts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    caption: Mapped[str] = mapped_column(Text)
+    image_ref: Mapped[str] = mapped_column(Text)
+    caption_he: Mapped[str] = mapped_column(Text)
+    caption_en: Mapped[str] = mapped_column(Text)
     visual_concept: Mapped[str] = mapped_column(Text)
     rationale: Mapped[str] = mapped_column(Text, default="")
 

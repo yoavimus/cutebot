@@ -1,7 +1,8 @@
 """Stage 1 — batch generation.
 
-Reads brand guidelines, asks the LLM agent for N suggestions, and persists them as
-``Post`` rows in ``suggested`` status plus a ``Batch`` provenance row.
+Image-first (PRODUCT_SPEC §3): pick images from the stock library, then caption each
+one (vision, bilingual) — never the reverse. Persists ``Post`` rows in ``suggested``
+status plus a ``Batch`` provenance row.
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import llm
+from app import llm, stock
 from app.brand import load_brand
 from app.config import get_settings
 from app.models import Batch, Post, PostStatus
@@ -29,20 +30,25 @@ async def generate_batch(
     size = n or settings.batch_size
     brand_text = brand if brand is not None else load_brand()
 
-    suggestions = await llm.generate_suggestions(brand_text, size)
+    images = await stock.select_images(session, size, settings)
 
     batch = Batch(
         model=settings.default_llm_model,
-        size=len(suggestions),
+        size=len(images),
         brand_snapshot=brand_text,
     )
     session.add(batch)
     await session.flush()  # assign batch.id
 
+    stock_dir = settings.stock_images_dir
     posts: list[Post] = []
-    for s in suggestions:
+    for image in images:
+        s = await llm.caption_image(brand_text, image, settings)
+        ref = str(image.relative_to(stock_dir)) if image.is_relative_to(stock_dir) else str(image)
         post = Post(
-            caption=s.caption,
+            image_ref=ref,
+            caption_he=s.caption_he,
+            caption_en=s.caption_en,
             visual_concept=s.visual_concept,
             rationale=s.rationale,
             status=PostStatus.SUGGESTED,

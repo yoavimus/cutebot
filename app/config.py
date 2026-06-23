@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     posting_slots: str = "12:00,18:00"
     brand_file: str = "brand.yaml"
 
+    # Image-first generation (stock library + bilingual captioning)
+    stock_images_dir: str = "stock"
+    primary_language: str = "he"
+    secondary_languages: str = "en"
+    post_disclaimer: str = "🤖 מאת CuteBot · by CuteBot"
+
     # Publishers (stubs in v1)
     instagram_access_token: str = ""
     tiktok_access_token: str = ""
@@ -59,6 +65,11 @@ class Settings(BaseSettings):
             hh, _, mm = raw.partition(":")
             slots.append((int(hh), int(mm or 0)))
         return slots
+
+    @property
+    def secondary_languages_list(self) -> list[str]:
+        """Parse ``SECONDARY_LANGUAGES`` ("en" or "en,fr") into ["en"] / ["en", "fr"]."""
+        return [lang.strip() for lang in self.secondary_languages.split(",") if lang.strip()]
 
 
 @lru_cache

@@ -6,6 +6,7 @@ uvicorn[standard]==0.32.1
 sqlalchemy[asyncio]==2.0.36
 asyncpg==0.30.0
 aiosqlite==0.20.0          # local-dev / test SQLite driver
+alembic==1.14.1
 
 # Config
 pydantic==2.12.5

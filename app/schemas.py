@@ -10,24 +10,21 @@ from pydantic import BaseModel, Field
 
 
 class PostSuggestion(BaseModel):
-    """One generated post idea. This is exactly what the LLM must return per item."""
+    """One generated post idea, grounded in a specific image. Exactly what the LLM must return."""
 
-    caption: str = Field(description="The post caption, written in the brand's voice.")
-    visual_concept: str = Field(description="A short description of the matching image/video.")
+    caption_he: str = Field(description="The Hebrew (primary) caption, in the brand's voice.")
+    caption_en: str = Field(description="The English caption, in the brand's voice.")
+    visual_concept: str = Field(description="A short description of the image the caption matches.")
     rationale: str = Field(default="", description="Why this fits the brand (for the reviewer).")
-
-
-class GenerationResult(BaseModel):
-    """Wrapper the LLM returns: a list of suggestions."""
-
-    posts: list[PostSuggestion]
 
 
 class PostOut(BaseModel):
     """API representation of a stored post."""
 
     id: int
-    caption: str
+    image_ref: str
+    caption_he: str
+    caption_en: str
     visual_concept: str
     rationale: str
     status: str

@@ -51,6 +51,7 @@ uv pip install -r requirements.txt
 
 # 2. Configure
 cp env.example .env        # then fill in ANTHROPIC_API_KEY, DATABASE_URL, TELEGRAM_*
+mkdir -p stock && cp /path/to/your/images/*.jpg stock/   # drop in your stock images
 
 # 3. Run the API + scheduler
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8002

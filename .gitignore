@@ -24,6 +24,7 @@ htmlcov/
 .env.*.local
 *.session
 brand.yaml
+stock/
 
 # Logs
 *.log

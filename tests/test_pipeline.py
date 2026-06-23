@@ -1,18 +1,22 @@
 """End-to-end pipeline test: generate → approve/reject → queue → publish.
 
-The LLM and publishers are stubbed; no network is touched.
+The LLM, stock library, and publishers are stubbed; no network or real files touched.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import llm
+from app import llm, stock
+from app.config import Settings, get_settings
 from app.models import Decision, Feedback, Post, PostStatus
 from app.pipeline import generate, publish, queue, review
 from app.publishers.base import Publisher, PublishResult
+from app.render import render_full_caption
 from app.schemas import PostSuggestion
 
 
@@ -40,13 +44,25 @@ class _FailPublisher:
 
 @pytest.fixture(autouse=True)
 def _stub_llm(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake(brand: str, n: int) -> list[PostSuggestion]:
-        return [
-            PostSuggestion(caption=f"cap {i}", visual_concept=f"vis {i}", rationale="r")
-            for i in range(n)
-        ]
+    async def fake_caption_image(
+        brand: str, image_path: Path, settings: Settings
+    ) -> PostSuggestion:
+        return PostSuggestion(
+            caption_he=f"כיתוב {image_path.name}",
+            caption_en=f"caption {image_path.name}",
+            visual_concept=f"vis {image_path.name}",
+            rationale="r",
+        )
 
-    monkeypatch.setattr(llm, "generate_suggestions", fake)
+    monkeypatch.setattr(llm, "caption_image", fake_caption_image)
+
+
+@pytest.fixture(autouse=True)
+def _stub_stock(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_select_images(session: AsyncSession, n: int, settings: Settings) -> list[Path]:
+        return [Path(f"{chr(ord('a') + i)}.jpg") for i in range(n)]
+
+    monkeypatch.setattr(stock, "select_images", fake_select_images)
 
 
 async def test_generate_creates_suggested_posts(session: AsyncSession) -> None:
@@ -54,6 +70,21 @@ async def test_generate_creates_suggested_posts(session: AsyncSession) -> None:
     assert len(posts) == 3
     assert all(p.status == PostStatus.SUGGESTED for p in posts)
     assert all(p.batch_id is not None for p in posts)
+    assert all(p.image_ref for p in posts)
+    assert all(p.caption_he for p in posts)
+    assert all(p.caption_en for p in posts)
+
+
+async def test_render_full_caption_has_both_languages_and_disclaimer(
+    session: AsyncSession,
+) -> None:
+    posts = await generate.generate_batch(session, n=1, brand="b")
+    settings = get_settings()
+    rendered = render_full_caption(posts[0], settings)
+    assert posts[0].caption_he in rendered
+    assert posts[0].caption_en in rendered
+    assert settings.post_disclaimer in rendered
+    assert rendered.index(posts[0].caption_he) < rendered.index(posts[0].caption_en)
 
 
 async def test_send_for_review_notifies_each(session: AsyncSession) -> None:
