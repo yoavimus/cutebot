@@ -44,12 +44,13 @@ future suggestions.
 ## Quickstart
 
 ```bash
-# 1. Install deps (uses a virtualenv)
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+# 1. Set up an isolated env on the pinned interpreter (Python 3.12) with uv.
+#    Install uv if needed: curl -LsSf https://astral.sh/uv/install.sh | sh
+uv venv && source .venv/bin/activate
+uv pip install -r requirements.txt
 
 # 2. Configure
-cp .env.example .env       # then fill in ANTHROPIC_API_KEY, DATABASE_URL, TELEGRAM_*
+cp env.example .env        # then fill in ANTHROPIC_API_KEY, DATABASE_URL, TELEGRAM_*
 
 # 3. Run the API + scheduler
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8002

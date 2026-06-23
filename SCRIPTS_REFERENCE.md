@@ -6,11 +6,17 @@
 
 ## Environment
 
+Per the global standard: **`uv` with a pinned interpreter (Python 3.12)**. The
+machine's default `python3` is 3.14, which fails to build some 3.12-only wheels — `uv`
+provisions 3.12 for you.
+
 ```bash
-python3 -m venv .venv           # create once
-source .venv/bin/activate       # activate (prompt shows (.venv))
-pip install -r requirements.txt # install deps
-cp env.example .env             # then fill in secrets
+# Install uv once (if missing): curl -LsSf https://astral.sh/uv/install.sh | sh
+uv python pin 3.12                  # writes .python-version (already committed)
+uv venv                             # create .venv on Python 3.12 (auto-installs it)
+source .venv/bin/activate           # prompt shows (.venv)
+uv pip install -r requirements.txt  # install deps
+cp env.example .env                 # then fill in secrets
 ```
 
 ## Run the app (API + in-process scheduler)

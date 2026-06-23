@@ -49,7 +49,9 @@ memory step.
 
 - **Project root**: `/home/yoav/Projects/cutebot`.
 - **Port 8002** (8000/8001 are taken by other local projects).
-- **Virtual env**: `source .venv/bin/activate` (look for `(.venv)` prefix).
+- **Python env**: per the global standard — `uv` with a pinned interpreter. Target is
+  **Python 3.12** (`.python-version`); `uv venv && source .venv/bin/activate`. Don't use
+  a bare `python3 -m venv` (the machine's `python3` is 3.14 and breaks 3.12-only wheels).
 - **FastAPI local**: bind `127.0.0.1`; use `0.0.0.0` for containers/Railway.
 - See `.claude/skills/run/SKILL.md` for full startup incl. Telegram webhook/polling.
 
