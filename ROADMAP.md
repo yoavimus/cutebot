@@ -65,6 +65,8 @@ languages and the disclaimer. ruff/mypy/pytest green.
 
 ## M1 — Real generation, validated
 
+> Detailed implementation plan: **`M1_PLAN.md`**.
+
 - [ ] Run against a live `ANTHROPIC_API_KEY`; verify multimodal output + structure.
 - [ ] **Hebrew quality gate** — native review of a real batch; tune the prompt until the
       Hebrew reads naturally (not translated-sounding) and the English matches in voice.
