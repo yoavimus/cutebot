@@ -63,16 +63,16 @@ The headline of v1. Reorder generation to *image → caption* with vision.
 vision-grounded **Hebrew + English** caption; the Telegram DM shows that photo with both
 languages and the disclaimer. ruff/mypy/pytest green.
 
-## M1 — Real generation, validated
+## M1 — Real generation, validated ✅
 
 > Detailed implementation plan: **`M1_PLAN.md`**.
 
-- [ ] Run against a live `ANTHROPIC_API_KEY`; verify multimodal output + structure.
-- [ ] **Hebrew quality gate** — native review of a real batch; tune the prompt until the
-      Hebrew reads naturally (not translated-sounding) and the English matches in voice.
-- [ ] Realistic `brand.yaml`; prompt tuning for voice + hard-rule adherence.
-- [ ] `llm.py`: retries, timeout, `max_tokens`/cost guardrails, graceful failure.
-- [ ] Image rotation/dedup so the pool cycles before reuse.
+- [x] Run against a live API key; verify multimodal output + structure.
+- [x] **Hebrew quality gate** — native review of a real batch; Hebrew reads naturally,
+      not translated; English matches in voice. GPT-4o clears the gate.
+- [x] Realistic `brand.yaml`; prompt tuning for voice + hard-rule adherence.
+- [x] `llm.py`: retries, timeout, `max_tokens`/cost guardrails, graceful failure.
+- [x] Image rotation/dedup so the pool cycles before reuse.
 
 **DoD:** a real batch reads cleanly on-brand in **native-quality Hebrew + English** with
 the disclaimer present, against a sample stock library; failures degrade gracefully.
