@@ -26,6 +26,12 @@ pillars:
 # Audience.
 audience: "25–40, nostalgic, design-conscious, values craft and ethics."
 
+# Optional manually reviewed public context, copied in before a generation batch.
+# Keep this short: URLs, handles, timestamps, and summaries only.
+# market_context:
+#   - "X/Twitter post, 2026-01-15, @example: customers liked repair photos.
+#     https://x.com/example/status/123"
+
 # Visual direction for the matching image concept.
 visual_style:
   - "Soft natural light, warm cream and pastel palette."
