@@ -13,11 +13,18 @@ import json
 import logging
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from app.config import Settings, get_settings
 from app.schemas import PostSuggestion
 from app.stock import load_image_b64
 
 logger = logging.getLogger(__name__)
+
+
+class CaptionError(Exception):
+    """Raised when the LLM returns an unparseable or schema-invalid response."""
+
 
 _SYSTEM_PROMPT = """\
 You are CuteBot, an expert social-media copywriter for a single brand.
@@ -107,11 +114,17 @@ async def caption_image(brand: str, image_path: Path, settings: Settings) -> Pos
         model=settings.default_llm_model,
         messages=messages,
         response_format={"type": "json_object"},
-        max_tokens=2000,
+        max_tokens=settings.llm_max_tokens,
+        timeout=settings.llm_timeout_s,
+        num_retries=settings.llm_num_retries,
         # LiteLLM only reads keys from os.environ; pass explicitly since pydantic-settings
         # loads them into Settings, not the environment.
         api_key=_provider_key(),
     )
     content = response["choices"][0]["message"]["content"]
-    data = json.loads(content)
-    return PostSuggestion.model_validate(data)
+    try:
+        data = json.loads(content)
+        return PostSuggestion.model_validate(data)
+    except (json.JSONDecodeError, ValidationError) as exc:
+        logger.error("LLM returned invalid response for %s: %.200s", image_path.name, content)
+        raise CaptionError(str(exc)) from exc

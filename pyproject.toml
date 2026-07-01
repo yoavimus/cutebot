@@ -33,3 +33,4 @@ asyncio_mode = "auto"
 # with asyncpg — see global memory pytest-asyncio-loop-scope).
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+markers = ["live: opt-in integration tests requiring real API keys (skipped in CI)"]

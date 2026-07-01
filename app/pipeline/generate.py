@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import llm, stock
 from app.brand import load_brand
 from app.config import get_settings
+from app.llm import CaptionError
 from app.models import Batch, Post, PostStatus
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,11 @@ async def generate_batch(
     stock_dir = settings.stock_images_dir
     posts: list[Post] = []
     for image in images:
-        s = await llm.caption_image(brand_text, image, settings)
+        try:
+            s = await llm.caption_image(brand_text, image, settings)
+        except CaptionError as exc:
+            logger.warning("Skipping image %s: %s", image.name, exc)
+            continue
         ref = str(image.relative_to(stock_dir)) if image.is_relative_to(stock_dir) else str(image)
         post = Post(
             image_ref=ref,
@@ -57,6 +62,7 @@ async def generate_batch(
         session.add(post)
         posts.append(post)
 
+    batch.size = len(posts)  # actual successes, not planned
     await session.commit()
     for post in posts:
         await session.refresh(post)

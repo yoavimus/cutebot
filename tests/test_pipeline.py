@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import llm, stock
 from app.config import Settings, get_settings
+from app.llm import CaptionError
 from app.models import Decision, Feedback, Post, PostStatus
 from app.pipeline import generate, publish, queue, review
 from app.publishers.base import Publisher, PublishResult
@@ -144,3 +145,37 @@ async def test_publish_marks_failed_when_a_network_fails(session: AsyncSession) 
     await review.handle_decision(session, posts[0].id, Decision.APPROVE)
     result = await publish.publish_next(session, [_OkPublisher(), _FailPublisher()])
     assert result is not None and result.status == PostStatus.FAILED
+
+
+async def test_generate_skips_failed_image_keeps_good_ones(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    call_count = 0
+
+    async def flaky_caption(brand: str, image_path: Path, settings: Settings) -> PostSuggestion:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise CaptionError("simulated API failure")
+        return PostSuggestion(
+            caption_he=f"כיתוב {image_path.name}",
+            caption_en=f"caption {image_path.name}",
+            visual_concept="vis",
+            rationale="r",
+        )
+
+    monkeypatch.setattr(llm, "caption_image", flaky_caption)
+    posts = await generate.generate_batch(session, n=3, brand="b")
+    assert len(posts) == 2
+    assert all(p.status == PostStatus.SUGGESTED for p in posts)
+
+
+async def test_generate_all_failed_returns_empty_batch(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def always_fail(brand: str, image_path: Path, settings: Settings) -> PostSuggestion:
+        raise CaptionError("simulated total failure")
+
+    monkeypatch.setattr(llm, "caption_image", always_fail)
+    posts = await generate.generate_batch(session, n=2, brand="b")
+    assert posts == []

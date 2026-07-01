@@ -61,8 +61,9 @@ python -m app.notifier.telegram delete-webhook
 ruff check .          # lint
 ruff check . --fix    # lint + autofix
 mypy app              # type check
-pytest                # tests
+pytest                # tests (offline only — live tests skipped automatically)
 pytest -v             # verbose
+pytest -m live        # live integration tests (requires ANTHROPIC_API_KEY in env)
 ```
 
 ## Database

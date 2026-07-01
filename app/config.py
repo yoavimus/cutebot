@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     openai_api_key: str = ""
 
+    # LLM reliability (passed to LiteLLM; see app/llm.py)
+    llm_timeout_s: int = 60
+    llm_num_retries: int = 2
+    llm_max_tokens: int = 2000
+
     # Telegram review channel
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""

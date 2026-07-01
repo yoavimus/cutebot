@@ -55,6 +55,21 @@ double-post. Only `ok` → `published`; failure → `failed` (re-queueable later
 - After editing nested async code, re-run mypy — async SQLAlchemy typing bites.
 - No secrets in code or logs. Scrub tokens from any debug output.
 
+## Hebrew quality gate (M1)
+
+The LLM must produce **native-quality Hebrew** — written in Hebrew, not translated from English.
+Signals of failure: calque phrasing, wrong gender/number agreement, unnatural word order, RTL
+punctuation mis-placed.
+
+**Levers (in order):**
+1. Prompt emphasis: "write Hebrew first, then render English to match — do not translate".
+2. Brand-voice examples in `brand.yaml` with actual Hebrew sample posts.
+3. If Sonnet fails after prompt tuning → try `anthropic/claude-opus-4-8` and record the
+   cost/quality trade-off here before changing the default.
+
+**Model decision (update here after live testing):** TBD — run `pytest -m live` with a real
+key and a native Hebrew review of the output.
+
 ## RPER
 
 This project follows the RPER loop from global `~/.claude/CLAUDE.md`
