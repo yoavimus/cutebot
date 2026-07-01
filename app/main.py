@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db import SessionLocal, get_session, init_db
-from app.notifier.telegram import TelegramNotifier, parse_callback
+from app.notifier.telegram import TelegramNotifier, process_callback
 from app.pipeline import generate, publish, review
 from app.scheduler import build_scheduler
 
@@ -60,16 +60,9 @@ async def telegram_webhook(
     if not cb:
         return {"ok": True, "ignored": "no callback_query"}
 
-    parsed = parse_callback(cb.get("data", ""))
-    if not parsed:
-        return {"ok": True, "ignored": "unrecognized callback data"}
-
-    decision, post_id = parsed
-    post = await review.handle_decision(session, post_id, decision)
-
     notifier: TelegramNotifier = request.app.state.notifier
-    await notifier.answer_callback(cb["id"], f"Recorded: {decision} #{post_id}")
-    return {"ok": True, "post_id": post_id, "status": post.status if post else None}
+    await process_callback(session, notifier, cb)
+    return {"ok": True}
 
 
 # --------------------------------------------------------------- dev-only triggers

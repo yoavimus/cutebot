@@ -81,12 +81,12 @@ the disclaimer present, against a sample stock library; failures degrade gracefu
 
 ## M2 — Review loop hardening
 
-> Detailed implementation plan: **`M2_PLAN.md`**.
+> Shipped ✅ — plan at **`M2_PLAN.md`**.
 
-- [ ] Real approve/reject round-trip against a test chat (photo message → callback → state).
-- [ ] Edit the message on decision (strike-through / "✅ Approved" / "❌ Rejected").
-- [ ] Edge cases: expired buttons, unknown/double-tapped post (idempotency already holds).
-- [ ] Structured logging across the webhook + decision path.
+- [x] Real approve/reject round-trip against a test chat (photo message → callback → state).
+- [x] Edit the message on decision ("✅ Approved" / "❌ Rejected"), buttons removed.
+- [x] Edge cases: expired buttons (graceful), unknown post ("Post not found"), double-tap ("Already …").
+- [x] Structured logging across the webhook + decision path.
 
 **DoD:** a human can clear a full batch from Telegram; every decision is a `Feedback` row
 and the message reflects the outcome.

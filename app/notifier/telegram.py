@@ -1,7 +1,7 @@
 """Telegram review adapter — DMs suggestions with inline Approve/Reject buttons.
 
 Callback data is ``approve:<post_id>`` / ``reject:<post_id>``. The FastAPI webhook
-(``app/main.py``) parses callbacks and routes them to ``pipeline.review.handle_decision``.
+(``app/main.py``) parses callbacks and routes them to ``process_callback``.
 
 Run modes (CLI):
     python -m app.notifier.telegram poll           # long-poll (no public URL needed)
@@ -17,9 +17,11 @@ import logging
 import sys
 
 import httpx
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
-from app.models import Post
+from app.models import Post, PostStatus
+from app.pipeline.review import handle_decision
 from app.render import image_path, render_full_caption
 
 logger = logging.getLogger(__name__)
@@ -87,6 +89,66 @@ class TelegramNotifier:
                 json={"callback_query_id": callback_query_id, "text": text},
             )
 
+    async def mark_decided(self, cb_message: dict, decision: str) -> None:
+        """Edit the reviewed message to show the decision and remove the buttons."""
+        label = "✅ Approved" if decision == "approve" else "❌ Rejected"
+        chat_id = cb_message["chat"]["id"]
+        message_id = cb_message["message_id"]
+        is_photo = "photo" in cb_message
+        endpoint = "editMessageCaption" if is_photo else "editMessageText"
+        body_key = "caption" if is_photo else "text"
+        original = cb_message.get(body_key, "")
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(
+                    self._url(endpoint),
+                    json={
+                        "chat_id": chat_id,
+                        "message_id": message_id,
+                        body_key: f"{original}\n\n{label}",
+                        "reply_markup": {"inline_keyboard": []},
+                    },
+                )
+            if not resp.json().get("ok"):
+                logger.warning(
+                    "mark_decided edit rejected: message=%s description=%s",
+                    message_id,
+                    resp.json().get("description"),
+                )
+        except Exception as exc:
+            logger.warning("mark_decided failed: message=%s error=%s", message_id, exc)
+
+
+async def process_callback(session: AsyncSession, notifier: TelegramNotifier, cb: dict) -> None:
+    """Parse a Telegram callback query, apply the decision, update the message, and toast."""
+    parsed = parse_callback(cb.get("data", ""))
+    if not parsed:
+        return
+    decision, post_id = parsed
+    # ponytail: pre-fetch hits the identity map in handle_decision; no extra DB round-trip
+    pre = await session.get(Post, post_id)
+    was_fresh = pre is not None and pre.status == PostStatus.SUGGESTED
+    post = await handle_decision(session, post_id, decision)
+
+    if post is None:
+        toast = "Post not found"
+    elif was_fresh:
+        toast = "✅ Approved" if decision == "approve" else "❌ Rejected"
+    else:
+        toast = f"Already {post.status}"
+
+    if post is not None:
+        await notifier.mark_decided(cb["message"], decision)
+
+    logger.info(
+        "callback post_id=%s decision=%s status=%s toast=%r",
+        post_id,
+        decision,
+        post.status if post else None,
+        toast,
+    )
+    await notifier.answer_callback(cb["id"], toast)
+
 
 def parse_callback(data: str) -> tuple[str, int] | None:
     """Parse ``approve:<id>`` / ``reject:<id>`` into ``(decision, post_id)``."""
@@ -122,7 +184,6 @@ async def _delete_webhook() -> None:
 async def _poll() -> None:
     """Long-poll for updates and route callbacks (local dev; no public URL needed)."""
     from app.db import SessionLocal
-    from app.pipeline.review import handle_decision
 
     settings = get_settings()
     notifier = TelegramNotifier(settings)
@@ -139,13 +200,8 @@ async def _poll() -> None:
                 cb = update.get("callback_query")
                 if not cb:
                     continue
-                parsed = parse_callback(cb.get("data", ""))
-                if not parsed:
-                    continue
-                decision, post_id = parsed
                 async with SessionLocal() as session:
-                    await handle_decision(session, post_id, decision)
-                await notifier.answer_callback(cb["id"], f"Recorded: {decision} #{post_id}")
+                    await process_callback(session, notifier, cb)
 
 
 def main() -> None:
