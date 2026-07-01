@@ -35,7 +35,7 @@ is M0.
 
 ## M0 — Image-first generation (close the spec↔code gap)
 
-> Detailed, approved implementation plan: **`M0_PLAN.md`**.
+> Shipped ✅ — plan archived at **`docs/archive/M0_PLAN.md`**.
 
 The headline of v1. Reorder generation to *image → caption* with vision.
 
@@ -65,11 +65,13 @@ languages and the disclaimer. ruff/mypy/pytest green.
 
 ## M1 — Real generation, validated ✅
 
-> Detailed implementation plan: **`M1_PLAN.md`**.
+> Shipped ✅ — plan archived at **`docs/archive/M1_PLAN.md`**.
 
 - [x] Run against a live API key; verify multimodal output + structure.
 - [x] **Hebrew quality gate** — native review of a real batch; Hebrew reads naturally,
-      not translated; English matches in voice. GPT-4o clears the gate.
+      not translated; English matches in voice. GPT-4o cleared the gate in comparison
+      testing; **runtime model still open** (config default stays Claude Sonnet) — see
+      DEV_GUIDELINES "Model decision".
 - [x] Realistic `brand.yaml`; prompt tuning for voice + hard-rule adherence.
 - [x] `llm.py`: retries, timeout, `max_tokens`/cost guardrails, graceful failure.
 - [x] Image rotation/dedup so the pool cycles before reuse.
@@ -78,6 +80,8 @@ languages and the disclaimer. ruff/mypy/pytest green.
 the disclaimer present, against a sample stock library; failures degrade gracefully.
 
 ## M2 — Review loop hardening
+
+> Detailed implementation plan: **`M2_PLAN.md`**.
 
 - [ ] Real approve/reject round-trip against a test chat (photo message → callback → state).
 - [ ] Edit the message on decision (strike-through / "✅ Approved" / "❌ Rejected").

@@ -67,8 +67,14 @@ punctuation mis-placed.
 3. If Sonnet fails after prompt tuning → try `anthropic/claude-opus-4-8` and record the
    cost/quality trade-off here before changing the default.
 
-**Model decision (update here after live testing):** TBD — run `pytest -m live` with a real
-key and a native Hebrew review of the output.
+**Model decision — UNRESOLVED (open item as of M1 ship, revisit before M4).**
+Live testing found **GPT-4o clears the Hebrew gate**. But the coded default is still
+`anthropic/claude-sonnet-4-6` (`app/config.py`) and the architecture (CLAUDE.md,
+PRODUCT_SPEC §3) is Claude-via-LiteLLM by design. Switching the runtime to GPT-4o would be
+a **spec deviation** — do not treat it as decided. Options still on the table:
+(a) stay on Claude, tune the prompt / try `claude-opus-4-8`; (b) formally adopt GPT-4o and
+update PRODUCT_SPEC + CLAUDE.md + the config default to match. Pick one before shipping v1;
+until then the runtime is whatever `DEFAULT_LLM_MODEL` says (Claude Sonnet).
 
 ## RPER
 
