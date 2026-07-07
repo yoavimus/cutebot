@@ -105,9 +105,14 @@ correct state transitions; a crash mid-publish self-heals, never double-posts.
 
 ## M4 — Ship v1 to Railway
 
-- [ ] Postgres on Railway; run Alembic migrations on deploy.
-- [ ] Webhook mode (public HTTPS) + secret; env wiring; healthcheck.
-- [ ] Smoke test the deployed loop end-to-end.
+> Detailed implementation plan: **`M4_PLAN.md`**.
+
+- [ ] Postgres on Railway; normalize `DATABASE_URL` to `+asyncpg`; run Alembic migrations
+      on deploy (start command chains `alembic upgrade head`).
+- [ ] Webhook mode (public HTTPS) + secret; auto-register on prod startup; env wiring;
+      `/health` healthcheck.
+- [ ] Stock library + `brand.yaml` into the container (Railway volume — decision in plan).
+- [ ] Smoke test the deployed loop end-to-end (approve via real webhook → slot publish).
 
 **DoD:** the loop runs autonomously in production with stub publishers — **v1 shipped.**
 
