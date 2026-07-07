@@ -113,10 +113,19 @@ correct state transitions; a crash mid-publish self-heals, never double-posts.
 - [x] Railway provisioned: Postgres plugin + persistent volume (`/data`), all env vars set.
 - [x] `/health` green; dev routes 404 in prod; generation fired; Telegram approval via real webhook confirmed.
 
-> **One confirmation pending:** first natural posting slot (18:00 UTC) stub-publishes the
-> approved post. Everything is in place — just waiting for the clock.
-
 **DoD:** the loop runs autonomously in production with stub publishers — **v1 shipped.**
+
+## M5 — Post-v1 usability & operability
+
+> Shipped ✅ — tickets CUT-35 through CUT-40.
+
+- [x] **M5.1** — brand file switched from YAML to Markdown (`brand.example.md`; config default + `env.example` updated; code was already `read_text` verbatim).
+- [x] **M5.2** — `GET /dev/status` (20 most-recent posts, optional `?status=` filter); `POST /dev/run-cycle` (generate→auto-approve→publish in one call); `/dev/generate` and `/dev/publish-next` return full post objects instead of just IDs.
+- [x] **M5.3** — `select_images` uses `random.sample`; only images tied to APPROVED/PUBLISHING/PUBLISHED posts are blocked — rejected/suggested images are free again.
+- [x] **M5.4** — `handle_decision` allows APPROVED↔REJECTED flips (each writes a Feedback row); PUBLISHING/PUBLISHED hard-blocked. Telegram `mark_decided` leaves the opposite button until a post publishes.
+- [x] **M5.5** — `GENERATION_CRON` and `POSTING_SLOTS` documented in `env.example` and `SCRIPTS_REFERENCE.md` (edit + redeploy; times are UTC).
+
+**DoD:** pipeline is pleasant to operate — status visible in one curl, decisions reversible, images random, brand file editable by non-technical owners.
 
 ---
 
