@@ -81,7 +81,7 @@ the disclaimer present, against a sample stock library; failures degrade gracefu
 
 ## M2 — Review loop hardening
 
-> Shipped ✅ — plan at **`M2_PLAN.md`**.
+> Shipped ✅ — plan archived at **`docs/archive/M2_PLAN.md`**.
 
 - [x] Real approve/reject round-trip against a test chat (photo message → callback → state).
 - [x] Edit the message on decision ("✅ Approved" / "❌ Rejected"), buttons removed.
@@ -93,12 +93,15 @@ and the message reflects the outcome.
 
 ## M3 — End-to-end dry run
 
+> Detailed implementation plan: **`M3_PLAN.md`**.
+
 - [ ] Confirm posting slots fire and drain front-of-queue in order.
-- [ ] Exercise crash/retry idempotency (post claimed `publishing` before any send).
+- [ ] Exercise crash/retry idempotency (post claimed `publishing` before any send) **and
+      recover orphaned `publishing` posts** left by a crash mid-publish.
 - [ ] Publishers still stubs, now carrying the image.
 
 **DoD:** an approved post flows from queue to (stub) publish at a real slot, once, with
-correct state transitions.
+correct state transitions; a crash mid-publish self-heals, never double-posts.
 
 ## M4 — Ship v1 to Railway
 
