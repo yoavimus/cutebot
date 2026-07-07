@@ -19,9 +19,18 @@ class Base(DeclarativeBase):
     """Declarative base for all ORM models."""
 
 
+def _normalize_db_url(url: str) -> str:
+    # ponytail: prefix swap; Railway injects postgresql:// / postgres://, asyncpg needs +asyncpg
+    if url.startswith("postgres://"):
+        return "postgresql+asyncpg://" + url[len("postgres://"):]
+    if url.startswith("postgresql://"):
+        return "postgresql+asyncpg://" + url[len("postgresql://"):]
+    return url
+
+
 def make_engine(database_url: str | None = None) -> AsyncEngine:
     """Create an async engine. Tests pass their own in-memory URL."""
-    url = database_url or get_settings().database_url
+    url = _normalize_db_url(database_url or get_settings().database_url)
     return create_async_engine(url, future=True)
 
 

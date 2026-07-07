@@ -66,6 +66,74 @@ pytest -v             # verbose
 pytest -m live        # live integration tests (requires ANTHROPIC_API_KEY in env)
 ```
 
+## Deploy to Railway (v1)
+
+**One-time setup** (done once per service):
+
+1. Provision a Postgres plugin → sets `${{Postgres.DATABASE_URL}}` reference var.
+2. Add a persistent volume (e.g. `/data`) and create dirs on it:
+
+   ```bash
+   # SSH into the container once (railway run) or use the Railway shell:
+   mkdir -p /data/stock
+   # scp or upload brand.yaml + stock images into /data/
+   ```
+
+3. Set Railway service variables (Settings → Variables):
+
+   ```
+   APP_ENV=production
+   HOST=0.0.0.0
+   DATABASE_URL=${{Postgres.DATABASE_URL}}
+   ANTHROPIC_API_KEY=<key>
+   DEFAULT_LLM_MODEL=anthropic/claude-sonnet-4-6
+   TELEGRAM_BOT_TOKEN=<token>
+   TELEGRAM_CHAT_ID=<chat_id>
+   TELEGRAM_WEBHOOK_BASE=https://<your-service>.up.railway.app
+   TELEGRAM_WEBHOOK_SECRET=<random-string>
+   STOCK_IMAGES_DIR=/data/stock
+   BRAND_FILE=/data/brand.yaml
+   ```
+
+4. Set healthcheck path to `/health` in Railway service settings.
+
+**Start command** (set in Railway or via `Procfile`):
+
+```
+alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+```
+
+**Deploy:**
+
+```bash
+railway up       # deploy from local branch
+railway logs     # stream deploy logs — confirm "alembic upgrade head" ran + "CuteBot started"
+```
+
+**Smoke test:**
+
+```bash
+# Health
+curl https://<service>.up.railway.app/health  # -> {"status":"ok"}
+
+# Webhook registered automatically on boot — confirm:
+curl "https://api.telegram.org/bot<TOKEN>/getWebhookInfo"
+# -> url should show your Railway URL; pending_update_count should be 0
+
+# Dev routes must be 404 in prod:
+curl -X POST https://<service>.up.railway.app/dev/generate  # -> 404
+
+# End-to-end: wait for generation cron (or temporarily set GENERATION_CRON=* * * * *)
+# -> Telegram DM arrives → Approve → at posting slot stub-publishes once
+# Restart mid-publish → recover_orphaned logs the sweep, no double-post
+```
+
+**Drift check (before/after schema changes):**
+
+```bash
+railway run alembic check  # no drift expected against models.py
+```
+
 ## Database
 
 ```bash

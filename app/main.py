@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.db import SessionLocal, get_session, init_db
 from app.models import Post
-from app.notifier.telegram import TelegramNotifier, process_callback
+from app.notifier.telegram import TelegramNotifier, _set_webhook, process_callback
 from app.pipeline import generate, publish, queue, review
 from app.scheduler import build_scheduler
 
@@ -32,6 +32,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     scheduler.start()
     app.state.notifier = notifier
     app.state.scheduler = scheduler
+    if not settings.is_dev and settings.telegram_webhook_base:
+        await _set_webhook()
     logger.info("CuteBot started (env=%s).", settings.app_env)
     try:
         yield
