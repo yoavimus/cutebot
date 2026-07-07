@@ -12,8 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db import SessionLocal, get_session, init_db
+from app.models import Post
 from app.notifier.telegram import TelegramNotifier, process_callback
-from app.pipeline import generate, publish, review
+from app.pipeline import generate, publish, queue, review
 from app.scheduler import build_scheduler
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     if settings.is_dev:
         await init_db()
+    async with SessionLocal() as session:
+        await publish.recover_orphaned(session)
     notifier = TelegramNotifier(settings)
     scheduler = build_scheduler(SessionLocal, notifier, settings)
     scheduler.start()
@@ -83,6 +86,17 @@ async def dev_publish_next(session: AsyncSession = Depends(get_session)) -> dict
     _require_dev()
     post = await publish.publish_next(session)
     return {"published": post.id if post else None}
+
+
+@app.post("/dev/requeue/{post_id}")
+async def dev_requeue(post_id: int, session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+    _require_dev()
+    post = await session.get(Post, post_id)
+    if post is None:
+        raise HTTPException(status_code=404, detail="post not found")
+    await queue.requeue(session, post)
+    await session.commit()
+    return {"requeued": post_id, "queue_position": post.queue_position}
 
 
 def _require_dev() -> None:

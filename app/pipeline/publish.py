@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Post, PostStatus
@@ -17,6 +18,22 @@ from app.pipeline import queue
 from app.publishers.base import Publisher, get_publishers
 
 logger = logging.getLogger(__name__)
+
+
+async def recover_orphaned(session: AsyncSession) -> int:
+    """Reset any PUBLISHING posts to APPROVED (startup crash recovery).
+
+    ponytail: startup sweep; add per-post leases only if v1 ever goes multi-worker.
+    """
+    posts = (
+        await session.scalars(select(Post).where(Post.status == PostStatus.PUBLISHING))
+    ).all()
+    for post in posts:
+        post.status = PostStatus.APPROVED
+    if posts:
+        await session.commit()
+        logger.info("Recovered %d orphaned publishing post(s).", len(posts))
+    return len(posts)
 
 
 async def publish_next(
@@ -29,6 +46,7 @@ async def publish_next(
         logger.info("Posting slot fired but the queue is empty — nothing to publish.")
         return None
 
+    # ponytail: peek→claim not atomic; SELECT … FOR UPDATE SKIP LOCKED on Postgres if multi-worker
     # Claim the post before any network call (idempotency guard).
     post.status = PostStatus.PUBLISHING
     await session.commit()

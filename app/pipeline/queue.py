@@ -34,6 +34,17 @@ async def peek_next(session: AsyncSession) -> Post | None:
     )
 
 
+async def requeue(session: AsyncSession, post: Post) -> None:
+    """Move a FAILED post to the back of the queue. Caller owns the commit."""
+    if post.status != PostStatus.FAILED:
+        return
+    max_pos = await session.scalar(
+        select(func.max(Post.queue_position)).where(Post.status == PostStatus.APPROVED)
+    )
+    post.status = PostStatus.APPROVED
+    post.queue_position = (max_pos or 0) + 1
+
+
 async def queue_length(session: AsyncSession) -> int:
     count = await session.scalar(
         select(func.count()).select_from(Post).where(Post.status == PostStatus.APPROVED)

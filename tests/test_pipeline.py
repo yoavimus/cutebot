@@ -179,3 +179,83 @@ async def test_generate_all_failed_returns_empty_batch(
     monkeypatch.setattr(llm, "caption_image", always_fail)
     posts = await generate.generate_batch(session, n=2, brand="b")
     assert posts == []
+
+
+# ---------------------------------------------------------------------------
+# M3 — publish path: ordering, idempotency, crash recovery, requeue
+
+
+async def test_ordering_three_posts(session: AsyncSession) -> None:
+    posts = await generate.generate_batch(session, n=3, brand="b")
+    for p in posts:
+        await review.handle_decision(session, p.id, Decision.APPROVE)
+
+    pubs: list[Publisher] = [_OkPublisher()]
+    results = [await publish.publish_next(session, pubs) for _ in range(3)]
+    assert [r.id for r in results] == [p.id for p in posts]
+    assert all(r.status == PostStatus.PUBLISHED for r in results)
+    assert await queue.queue_length(session) == 0
+    assert await publish.publish_next(session, pubs) is None
+
+
+async def test_publishing_post_not_re_peeked(session: AsyncSession) -> None:
+    posts = await generate.generate_batch(session, n=2, brand="b")
+    await review.handle_decision(session, posts[0].id, Decision.APPROVE)
+    await review.handle_decision(session, posts[1].id, Decision.APPROVE)
+    # Simulate crash: posts[0] claimed as PUBLISHING but never completed
+    await session.refresh(posts[0])
+    posts[0].status = PostStatus.PUBLISHING
+    await session.commit()
+    # publish_next must pick posts[1], not the stuck PUBLISHING post
+    result = await publish.publish_next(session, [_OkPublisher()])
+    assert result is not None and result.id == posts[1].id
+
+
+async def test_recover_orphaned(session: AsyncSession) -> None:
+    posts = await generate.generate_batch(session, n=1, brand="b")
+    await review.handle_decision(session, posts[0].id, Decision.APPROVE)
+    await session.refresh(posts[0])
+    original_pos = posts[0].queue_position
+    # Simulate crash: post stuck in PUBLISHING
+    posts[0].status = PostStatus.PUBLISHING
+    await session.commit()
+    # Sweep: should reset to APPROVED with queue_position intact
+    n = await publish.recover_orphaned(session)
+    assert n == 1
+    await session.refresh(posts[0])
+    assert posts[0].status == PostStatus.APPROVED
+    assert posts[0].queue_position == original_pos
+    # Next slot publishes it exactly once
+    result = await publish.publish_next(session, [_OkPublisher()])
+    assert result is not None and result.id == posts[0].id
+    assert result.status == PostStatus.PUBLISHED
+
+
+async def test_failed_post_requeue(session: AsyncSession) -> None:
+    posts = await generate.generate_batch(session, n=1, brand="b")
+    await review.handle_decision(session, posts[0].id, Decision.APPROVE)
+    failed = await publish.publish_next(session, [_FailPublisher()])
+    assert failed is not None and failed.status == PostStatus.FAILED
+    assert await queue.queue_length(session) == 0
+    # Requeue puts it back
+    await queue.requeue(session, failed)
+    await session.commit()
+    assert failed.status == PostStatus.APPROVED
+    published = await publish.publish_next(session, [_OkPublisher()])
+    assert published is not None and published.id == failed.id
+    assert published.status == PostStatus.PUBLISHED
+
+
+async def test_full_state_transition_arc(session: AsyncSession) -> None:
+    posts = await generate.generate_batch(session, n=1, brand="b")
+    post = posts[0]
+    assert post.status == PostStatus.SUGGESTED
+    assert post.published_at is None
+
+    await review.handle_decision(session, post.id, Decision.APPROVE)
+    await session.refresh(post)
+    assert post.status == PostStatus.APPROVED
+
+    result = await publish.publish_next(session, [_OkPublisher()])
+    assert result is not None and result.status == PostStatus.PUBLISHED
+    assert result.published_at is not None
