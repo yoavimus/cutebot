@@ -93,7 +93,7 @@ and the message reflects the outcome.
 
 ## M3 — End-to-end dry run
 
-> Shipped ✅ — plan at **`M3_PLAN.md`**.
+> Shipped ✅ — plan archived at **`docs/archive/M3_PLAN.md`**.
 
 - [x] Confirm posting slots fire and drain front-of-queue in order (test-verified).
 - [x] Crash recovery: `recover_orphaned` sweeps `PUBLISHING` on startup; `requeue` + `/dev/requeue/{id}` for `FAILED` posts.
