@@ -112,12 +112,9 @@ correct state transitions.
 
 ## Post-v1 (PRODUCT_SPEC §8, resequenced by value)
 
-### dev note - move E to be num 4 in order (just before more review channels)
-
-1. **E — first real publisher** (one network: Instagram Graph or X) with OAuth + media
-   upload. Highest external value; turns stub-publish into real reach.
-2. **A — learning loop v2** — few-shot from accumulated approvals; learn from rejections.
-3. **C — inline editing** — "Approve with edits" as a stronger training signal.
+1. **A — learning loop v2** — few-shot from accumulated approvals; learn from rejections.
+2. **C — inline editing** — "Approve with edits" as a stronger training signal.
+3. **E — first real publisher** (one network: Instagram Graph or X) with OAuth + media upload. turns stub-publish into real reach.
 4. **D — more review channels** — Discord/Slack notifier adapters.
 5. **F — analytics feedback** — pull post performance back as a generation signal.
 6. **G — multi-brand / multi-tenant** — scope everything by `brand_id`.
