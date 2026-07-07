@@ -105,13 +105,16 @@ correct state transitions; a crash mid-publish self-heals, never double-posts.
 
 ## M4 — Ship v1 to Railway
 
-> Code shipped ✅ — plan at **`M4_PLAN.md`**. Pending: Railway provisioning + smoke test (CUT-34).
+> Shipped ✅ — plan at **`M4_PLAN.md`**.
 
 - [x] Postgres URL normalization (`app/db.py`: coerces `postgresql://`/`postgres://` → `+asyncpg`).
-- [x] `Procfile`: `alembic upgrade head && uvicorn … --host 0.0.0.0 --port $PORT`.
+- [x] `Procfile` + `railway.toml`: `alembic upgrade head && uvicorn … --host 0.0.0.0 --port $PORT`.
 - [x] Webhook auto-registered on prod startup; env inventory documented in `env.example`.
-- [ ] **Railway provisioning + smoke test** (CUT-34): Postgres plugin + volume, set vars,
-      deploy, confirm `/health` + webhook + end-to-end round-trip.
+- [x] Railway provisioned: Postgres plugin + persistent volume (`/data`), all env vars set.
+- [x] `/health` green; dev routes 404 in prod; generation fired; Telegram approval via real webhook confirmed.
+
+> **One confirmation pending:** first natural posting slot (18:00 UTC) stub-publishes the
+> approved post. Everything is in place — just waiting for the clock.
 
 **DoD:** the loop runs autonomously in production with stub publishers — **v1 shipped.**
 
