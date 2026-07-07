@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from sqlalchemy import ForeignKey, String, Text
+from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -37,7 +37,7 @@ class Batch(Base):
     __tablename__ = "batches"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     model: Mapped[str] = mapped_column(String(128))
     size: Mapped[int] = mapped_column()
     brand_snapshot: Mapped[str] = mapped_column(Text, default="")
@@ -60,9 +60,9 @@ class Post(Base):
     status: Mapped[PostStatus] = mapped_column(String(16), default=PostStatus.SUGGESTED)
     queue_position: Mapped[int | None] = mapped_column(default=None)
 
-    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
-    decided_at: Mapped[datetime | None] = mapped_column(default=None)
-    published_at: Mapped[datetime | None] = mapped_column(default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
     batch_id: Mapped[int | None] = mapped_column(ForeignKey("batches.id"), default=None)
     batch: Mapped[Batch | None] = relationship(back_populates="posts")
@@ -78,6 +78,6 @@ class Feedback(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     post_id: Mapped[int] = mapped_column(ForeignKey("posts.id"))
     decision: Mapped[Decision] = mapped_column(String(16))
-    created_at: Mapped[datetime] = mapped_column(default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     post: Mapped[Post] = relationship(back_populates="feedback")
