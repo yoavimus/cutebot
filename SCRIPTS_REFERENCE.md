@@ -34,14 +34,24 @@ curl -s http://127.0.0.1:8002/health        # -> {"status":"ok"}
 
 ## Trigger pipeline stages manually (no waiting for cron)
 
-Dev-only endpoints, enabled when `APP_ENV=development`:
+Dev-only endpoints (enabled when `APP_ENV=development`; all return 404 in prod):
 
 ```bash
-# Generate a batch now and DM the suggestions to Telegram
-curl -s -X POST http://127.0.0.1:8002/dev/generate
+# See pipeline state at a glance — replaces raw sqlite3 queries
+curl -s http://127.0.0.1:8002/dev/status | jq
+curl -s 'http://127.0.0.1:8002/dev/status?status=approved' | jq
 
-# Drain one post from the queue to the publishers now
-curl -s -X POST http://127.0.0.1:8002/dev/publish-next
+# Generate a batch now; returns post objects with truncated captions
+curl -s -X POST http://127.0.0.1:8002/dev/generate | jq
+
+# Drain one post from the queue; returns the published post's state
+curl -s -X POST http://127.0.0.1:8002/dev/publish-next | jq
+
+# Full cycle in one call: generate → auto-approve → publish (dev only, never prod)
+curl -s -X POST http://127.0.0.1:8002/dev/run-cycle | jq
+
+# Requeue a specific FAILED post
+curl -s -X POST http://127.0.0.1:8002/dev/requeue/42 | jq
 ```
 
 ## Telegram review channel
@@ -92,7 +102,10 @@ pytest -m live        # live integration tests (requires ANTHROPIC_API_KEY in en
    TELEGRAM_WEBHOOK_BASE=https://<your-service>.up.railway.app
    TELEGRAM_WEBHOOK_SECRET=<random-string>
    STOCK_IMAGES_DIR=/data/stock
-   BRAND_FILE=/data/brand.yaml
+   BRAND_FILE=/data/brand.md
+   # Schedule (change + redeploy to adjust):
+   GENERATION_CRON=0 9 * * *   # when to generate suggestions (UTC cron)
+   POSTING_SLOTS=12:00,18:00   # when to publish approved posts (HH:MM UTC, comma-separated)
    ```
 
 4. Set healthcheck path to `/health` in Railway service settings.

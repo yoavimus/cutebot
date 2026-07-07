@@ -113,14 +113,46 @@ async def test_reject_sets_status_and_skips_queue(session: AsyncSession) -> None
     assert await queue.queue_length(session) == 0
 
 
-async def test_decision_is_idempotent(session: AsyncSession) -> None:
+async def test_same_decision_is_idempotent(session: AsyncSession) -> None:
     posts = await generate.generate_batch(session, n=1, brand="b")
     await review.handle_decision(session, posts[0].id, Decision.APPROVE)
-    # Second decision must not double-write feedback or change state.
-    again = await review.handle_decision(session, posts[0].id, Decision.REJECT)
+    # Re-sending the same decision must not write a second Feedback row.
+    again = await review.handle_decision(session, posts[0].id, Decision.APPROVE)
     assert again is not None and again.status == PostStatus.APPROVED
     fb = (await session.scalars(select(Feedback))).all()
     assert len(fb) == 1
+
+
+async def test_flip_approve_to_reject(session: AsyncSession) -> None:
+    posts = await generate.generate_batch(session, n=1, brand="b")
+    await review.handle_decision(session, posts[0].id, Decision.APPROVE)
+    post = await review.handle_decision(session, posts[0].id, Decision.REJECT)
+    assert post is not None and post.status == PostStatus.REJECTED
+    assert post.queue_position is None
+    fb = (await session.scalars(select(Feedback).where(Feedback.post_id == posts[0].id))).all()
+    assert len(fb) == 2
+
+
+async def test_flip_reject_to_approve(session: AsyncSession) -> None:
+    posts = await generate.generate_batch(session, n=1, brand="b")
+    await review.handle_decision(session, posts[0].id, Decision.REJECT)
+    post = await review.handle_decision(session, posts[0].id, Decision.APPROVE)
+    assert post is not None and post.status == PostStatus.APPROVED
+    assert post.queue_position is not None
+    fb = (await session.scalars(select(Feedback).where(Feedback.post_id == posts[0].id))).all()
+    assert len(fb) == 2
+
+
+async def test_terminal_posts_cannot_be_flipped(session: AsyncSession) -> None:
+    posts = await generate.generate_batch(session, n=1, brand="b")
+    await review.handle_decision(session, posts[0].id, Decision.APPROVE)
+    await session.refresh(posts[0])
+    posts[0].status = PostStatus.PUBLISHED
+    await session.commit()
+    post = await review.handle_decision(session, posts[0].id, Decision.REJECT)
+    assert post is not None and post.status == PostStatus.PUBLISHED
+    fb = (await session.scalars(select(Feedback))).all()
+    assert len(fb) == 1  # original approve only
 
 
 async def test_publish_drains_front_of_queue(session: AsyncSession) -> None:

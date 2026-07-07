@@ -7,13 +7,17 @@ from pathlib import Path
 from app.config import get_settings
 
 _DEFAULT_BRAND = """\
-name: Demo Brand
-voice:
-  - Friendly, concise, a little playful.
-do_not:
-  - No exclamation-point spam.
-pillars:
-  - Behind-the-scenes moments.
+# Brand name
+Demo Brand
+
+## Voice & tone
+Friendly, concise, a little playful.
+
+## Hard rules
+- No exclamation-point spam.
+
+## Recurring themes
+- Behind-the-scenes moments.
 """
 
 

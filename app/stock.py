@@ -9,13 +9,14 @@ from __future__ import annotations
 import base64
 import logging
 import mimetypes
+import random
 from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
-from app.models import Post
+from app.models import Post, PostStatus
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +31,15 @@ def list_images(settings: Settings) -> list[Path]:
     return sorted(p for p in stock_dir.iterdir() if p.suffix.lower() in _EXTENSIONS)
 
 
-async def select_images(session: AsyncSession, n: int, settings: Settings) -> list[Path]:
-    """Pick ``n`` images, preferring ones not yet referenced by any ``Post`` (rotation).
+_COMMITTED = {PostStatus.APPROVED, PostStatus.PUBLISHING, PostStatus.PUBLISHED}
 
-    If the unused pool is smaller than ``n``, tops up by cycling already-used images.
-    Returns fewer than ``n`` only if the stock library has fewer than ``n`` images total.
+
+async def select_images(session: AsyncSession, n: int, settings: Settings) -> list[Path]:
+    """Pick ``n`` images randomly, preferring ones not tied to committed posts.
+
+    "Committed" = APPROVED/PUBLISHING/PUBLISHED. Rejected and suggested images are
+    free to reuse. If the uncommitted pool runs dry, cycles from committed images.
+    Returns fewer than ``n`` only if the stock library is totally empty.
     """
     stock_dir = Path(settings.stock_images_dir)
     images = list_images(settings)
@@ -42,14 +47,20 @@ async def select_images(session: AsyncSession, n: int, settings: Settings) -> li
         logger.warning("Stock library %s is empty — no images to select.", stock_dir)
         return []
 
-    used_refs = set((await session.scalars(select(Post.image_ref))).all())
-    unused = [p for p in images if str(p.relative_to(stock_dir)) not in used_refs]
-    used = [p for p in images if str(p.relative_to(stock_dir)) in used_refs]
+    committed_refs = set(
+        (await session.scalars(select(Post.image_ref).where(Post.status.in_(_COMMITTED)))).all()
+    )
+    unused = [p for p in images if str(p.relative_to(stock_dir)) not in committed_refs]
+    committed = [p for p in images if str(p.relative_to(stock_dir)) in committed_refs]
 
-    selected = unused[:n]
+    selected = random.sample(unused, min(n, len(unused)))
     if len(selected) < n:
         shortfall = n - len(selected)
-        cycle = used if used else images
+        cycle = committed if committed else images
+        if committed:
+            logger.warning(
+                "Stock library exhausted — all committed images in use. Add more images."
+            )
         selected += [cycle[i % len(cycle)] for i in range(shortfall)]
     return selected
 

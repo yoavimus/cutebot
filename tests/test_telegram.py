@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import llm, stock
 from app.config import Settings
+from app.models import Post, PostStatus
 from app.notifier.telegram import process_callback
 from app.pipeline import generate
 from app.schemas import PostSuggestion
@@ -16,11 +17,11 @@ from app.schemas import PostSuggestion
 
 class _FakeNotifier:
     def __init__(self) -> None:
-        self.marks: list[tuple[dict, str]] = []
+        self.marks: list[tuple[dict, Post]] = []
         self.toasts: list[tuple[str, str]] = []
 
-    async def mark_decided(self, cb_message: dict, decision: str) -> None:
-        self.marks.append((cb_message, decision))
+    async def mark_decided(self, cb_message: dict, post: Post) -> None:
+        self.marks.append((cb_message, post))
 
     async def answer_callback(self, callback_query_id: str, text: str) -> None:
         self.toasts.append((callback_query_id, text))
@@ -78,7 +79,7 @@ async def test_fresh_approve(session: AsyncSession) -> None:
     await process_callback(session, notifier, _photo_cb(posts[0].id, "approve"))
     assert notifier.toasts[0][1] == "✅ Approved"
     assert len(notifier.marks) == 1
-    assert notifier.marks[0][1] == "approve"
+    assert notifier.marks[0][1].status == PostStatus.APPROVED
 
 
 async def test_fresh_reject(session: AsyncSession) -> None:
@@ -123,3 +124,32 @@ async def test_mark_decided_uses_text_for_text_message(session: AsyncSession) ->
     await process_callback(session, notifier, cb)
     assert "text" in notifier.marks[0][0]
     assert "photo" not in notifier.marks[0][0]
+
+
+async def test_flip_approve_to_reject_callback(session: AsyncSession) -> None:
+    posts = await generate.generate_batch(session, n=1, brand="b")
+    notifier = _FakeNotifier()
+    await process_callback(session, notifier, _photo_cb(posts[0].id, "approve"))
+    await process_callback(session, notifier, _photo_cb(posts[0].id, "reject"))
+    assert notifier.toasts[1][1] == "❌ Rejected"
+    assert notifier.marks[1][1].status == PostStatus.REJECTED
+
+
+async def test_flip_reject_to_approve_callback(session: AsyncSession) -> None:
+    posts = await generate.generate_batch(session, n=1, brand="b")
+    notifier = _FakeNotifier()
+    await process_callback(session, notifier, _photo_cb(posts[0].id, "reject"))
+    await process_callback(session, notifier, _photo_cb(posts[0].id, "approve"))
+    assert notifier.toasts[1][1] == "✅ Approved"
+    assert notifier.marks[1][1].status == PostStatus.APPROVED
+
+
+async def test_published_post_cannot_be_flipped_callback(session: AsyncSession) -> None:
+    posts = await generate.generate_batch(session, n=1, brand="b")
+    await session.refresh(posts[0])
+    posts[0].status = PostStatus.PUBLISHED
+    await session.commit()
+    notifier = _FakeNotifier()
+    await process_callback(session, notifier, _photo_cb(posts[0].id, "reject"))
+    assert "Can't change" in notifier.toasts[0][1]
+    assert notifier.marks[0][1].status == PostStatus.PUBLISHED

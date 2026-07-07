@@ -7,12 +7,13 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db import SessionLocal, get_session, init_db
-from app.models import Post
+from app.models import Post, PostStatus
 from app.notifier.telegram import TelegramNotifier, _set_webhook, process_callback
 from app.pipeline import generate, publish, queue, review
 from app.scheduler import build_scheduler
@@ -73,6 +74,39 @@ async def telegram_webhook(
 # --------------------------------------------------------------- dev-only triggers
 
 
+def _post_summary(post: Post) -> dict[str, Any]:
+    """Compact post dict for dev responses."""
+    he = post.caption_he
+    en = post.caption_en
+    return {
+        "id": post.id,
+        "status": post.status,
+        "queue_position": post.queue_position,
+        "batch_id": post.batch_id,
+        "decided_at": post.decided_at.isoformat() if post.decided_at else None,
+        "published_at": post.published_at.isoformat() if post.published_at else None,
+        "image_ref": post.image_ref,
+        "caption_he": (he[:80] + "…") if len(he) > 80 else he,
+        "caption_en": (en[:80] + "…") if len(en) > 80 else en,
+    }
+
+
+@app.get("/dev/status")
+async def dev_status(
+    status: str | None = Query(default=None),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    _require_dev()
+    q = select(Post).order_by(Post.id.desc()).limit(20)
+    if status:
+        try:
+            q = q.where(Post.status == PostStatus(status))
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"unknown status {status!r}") from None
+    posts = (await session.scalars(q)).all()
+    return {"posts": [_post_summary(p) for p in posts]}
+
+
 @app.post("/dev/generate")
 async def dev_generate(
     request: Request, session: AsyncSession = Depends(get_session)
@@ -80,14 +114,31 @@ async def dev_generate(
     _require_dev()
     posts = await generate.generate_batch(session)
     await review.send_for_review(posts, request.app.state.notifier)
-    return {"generated": [p.id for p in posts]}
+    return {"generated": [_post_summary(p) for p in posts]}
 
 
 @app.post("/dev/publish-next")
 async def dev_publish_next(session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
     _require_dev()
     post = await publish.publish_next(session)
-    return {"published": post.id if post else None}
+    return {"published": _post_summary(post) if post else None}
+
+
+@app.post("/dev/run-cycle")
+async def dev_run_cycle(session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
+    """Generate → auto-approve → publish. One-shot dev cycle; never reachable in prod."""
+    _require_dev()
+    posts = await generate.generate_batch(session)
+    generated = [_post_summary(p) for p in posts]
+    for p in posts:
+        await review.handle_decision(session, p.id, "approve")
+    published: list[dict[str, Any]] = []
+    while True:
+        post = await publish.publish_next(session)
+        if post is None:
+            break
+        published.append(_post_summary(post))
+    return {"generated": generated, "published": published}
 
 
 @app.post("/dev/requeue/{post_id}")

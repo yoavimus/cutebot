@@ -25,21 +25,37 @@ async def send_for_review(posts: Sequence[Post], notifier: Notifier) -> None:
         await notifier.send_suggestion(post)
 
 
-async def handle_decision(session: AsyncSession, post_id: int, decision: str) -> Post | None:
-    """Apply an approve/reject decision: record feedback and advance state.
+_TERMINAL = {PostStatus.PUBLISHING, PostStatus.PUBLISHED, PostStatus.FAILED}
 
-    Idempotent w.r.t. already-decided posts — a second decision on the same post is
-    ignored (returns the post unchanged) so a double-tap can't corrupt the queue.
+
+async def handle_decision(session: AsyncSession, post_id: int, decision: str) -> Post | None:
+    """Apply an approve/reject decision, allowing reversals on pre-publish posts.
+
+    - SUGGESTED → approve/reject as normal.
+    - APPROVED → can be flipped to REJECTED (removes from queue).
+    - REJECTED → can be flipped to APPROVED (re-enqueues).
+    - Same decision repeated → no-op (idempotent).
+    - PUBLISHING/PUBLISHED/FAILED → never mutated (approval gate is load-bearing).
+    Every real transition writes a Feedback row.
     """
     post = await session.get(Post, post_id)
     if post is None:
         logger.warning("Decision for unknown post %s ignored.", post_id)
         return None
-    if post.status != PostStatus.SUGGESTED:
-        logger.info("Post %s already %s — ignoring %s.", post_id, post.status, decision)
+
+    if post.status in _TERMINAL:
+        logger.info("Post %s is %s — cannot reverse.", post_id, post.status)
         return post
 
     dec = Decision(decision)
+
+    # Same decision → no-op (double-tap guard)
+    if (dec is Decision.APPROVE and post.status == PostStatus.APPROVED) or (
+        dec is Decision.REJECT and post.status == PostStatus.REJECTED
+    ):
+        logger.info("Post %s already %s — no-op.", post_id, post.status)
+        return post
+
     session.add(Feedback(post_id=post.id, decision=dec))
     post.decided_at = datetime.now(UTC)
 
@@ -47,6 +63,7 @@ async def handle_decision(session: AsyncSession, post_id: int, decision: str) ->
         await queue.enqueue(session, post)
     else:
         post.status = PostStatus.REJECTED
+        post.queue_position = None  # remove from queue if reversing an approval
 
     await session.commit()
     await session.refresh(post)

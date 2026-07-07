@@ -89,9 +89,21 @@ class TelegramNotifier:
                 json={"callback_query_id": callback_query_id, "text": text},
             )
 
-    async def mark_decided(self, cb_message: dict, decision: str) -> None:
-        """Edit the reviewed message to show the decision and remove the buttons."""
-        label = "✅ Approved" if decision == "approve" else "❌ Rejected"
+    async def mark_decided(self, cb_message: dict, post: Post) -> None:
+        """Edit the reviewed message; leave the opposite button while decision is reversible."""
+        if post.status == PostStatus.APPROVED:
+            label = "✅ Approved"
+            keyboard = {"inline_keyboard": [[
+                {"text": "↩︎ Reject", "callback_data": f"reject:{post.id}"}
+            ]]}
+        elif post.status == PostStatus.REJECTED:
+            label = "❌ Rejected"
+            keyboard = {"inline_keyboard": [[
+                {"text": "↩︎ Approve", "callback_data": f"approve:{post.id}"}
+            ]]}
+        else:
+            label = "✅ Published" if post.status == PostStatus.PUBLISHED else f"[{post.status}]"
+            keyboard = {"inline_keyboard": []}
         chat_id = cb_message["chat"]["id"]
         message_id = cb_message["message_id"]
         is_photo = "photo" in cb_message
@@ -106,7 +118,7 @@ class TelegramNotifier:
                         "chat_id": chat_id,
                         "message_id": message_id,
                         body_key: f"{original}\n\n{label}",
-                        "reply_markup": {"inline_keyboard": []},
+                        "reply_markup": keyboard,
                     },
                 )
             if not resp.json().get("ok"):
@@ -119,6 +131,9 @@ class TelegramNotifier:
             logger.warning("mark_decided failed: message=%s error=%s", message_id, exc)
 
 
+_TERMINAL_CB = {PostStatus.PUBLISHING, PostStatus.PUBLISHED, PostStatus.FAILED}
+
+
 async def process_callback(session: AsyncSession, notifier: TelegramNotifier, cb: dict) -> None:
     """Parse a Telegram callback query, apply the decision, update the message, and toast."""
     parsed = parse_callback(cb.get("data", ""))
@@ -127,18 +142,20 @@ async def process_callback(session: AsyncSession, notifier: TelegramNotifier, cb
     decision, post_id = parsed
     # ponytail: pre-fetch hits the identity map in handle_decision; no extra DB round-trip
     pre = await session.get(Post, post_id)
-    was_fresh = pre is not None and pre.status == PostStatus.SUGGESTED
+    pre_status = pre.status if pre is not None else None  # capture before handle_decision mutates
     post = await handle_decision(session, post_id, decision)
 
     if post is None:
         toast = "Post not found"
-    elif was_fresh:
-        toast = "✅ Approved" if decision == "approve" else "❌ Rejected"
-    else:
+    elif pre_status in _TERMINAL_CB and pre_status == post.status:
+        toast = "Can't change — already published"
+    elif pre_status == post.status:
         toast = f"Already {post.status}"
+    else:
+        toast = "✅ Approved" if post.status == PostStatus.APPROVED else "❌ Rejected"
 
     if post is not None:
-        await notifier.mark_decided(cb["message"], decision)
+        await notifier.mark_decided(cb["message"], post)
 
     logger.info(
         "callback post_id=%s decision=%s status=%s toast=%r",
