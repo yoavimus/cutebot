@@ -95,10 +95,10 @@ and the message reflects the outcome.
 
 > Detailed implementation plan: **`M3_PLAN.md`**.
 
-- [ ] Confirm posting slots fire and drain front-of-queue in order.
-- [ ] Exercise crash/retry idempotency (post claimed `publishing` before any send) **and
-      recover orphaned `publishing` posts** left by a crash mid-publish.
-- [ ] Publishers still stubs, now carrying the image.
+- [x] Confirm posting slots fire and drain front-of-queue in order (test-verified).
+- [x] Crash recovery: `recover_orphaned` sweeps `PUBLISHING` on startup; `requeue` + `/dev/requeue/{id}` for `FAILED` posts.
+- [x] Publishers still stubs, carrying the image.
+- [ ] **Manual dry run** (CUT-28): real slot, real SQLite, approve via Telegram → publish in order; kill mid-publish → restart recovers; fail → requeue → publish.
 
 **DoD:** an approved post flows from queue to (stub) publish at a real slot, once, with
 correct state transitions; a crash mid-publish self-heals, never double-posts.
