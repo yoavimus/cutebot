@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     batch_size: int = 5
     generation_cron: str = "0 9 * * *"
     posting_slots: str = "12:00,18:00"
+    schedule_tz: str = "Asia/Jerusalem"
     brand_file: str = "brand.md"
 
     # Image-first generation (stock library + bilingual captioning)

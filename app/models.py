@@ -78,6 +78,7 @@ class Feedback(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     post_id: Mapped[int] = mapped_column(ForeignKey("posts.id"))
     decision: Mapped[Decision] = mapped_column(String(16))
+    reason: Mapped[str | None] = mapped_column(String(32), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     post: Mapped[Post] = relationship(back_populates="feedback")

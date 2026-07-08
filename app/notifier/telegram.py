@@ -1,7 +1,9 @@
 """Telegram review adapter — DMs suggestions with inline Approve/Reject buttons.
 
-Callback data is ``approve:<post_id>`` / ``reject:<post_id>``. The FastAPI webhook
-(``app/main.py``) parses callbacks and routes them to ``process_callback``.
+Callback data:
+  ``approve:<post_id>``            → approve the post
+  ``reject:<post_id>``             → show reason-picker chips
+  ``reason:<post_id>:<reason>``    → reject with the given reason (or "skip")
 
 Run modes (CLI):
     python -m app.notifier.telegram poll           # long-poll (no public URL needed)
@@ -15,6 +17,8 @@ import asyncio
 import json
 import logging
 import sys
+from pathlib import Path
+from typing import Any
 
 import httpx
 from sqlalchemy import func, select
@@ -30,6 +34,14 @@ logger = logging.getLogger(__name__)
 _API = "https://api.telegram.org/bot{token}/{method}"
 # Telegram photo captions are capped at 1024 chars; longer captions go in a follow-up text.
 _PHOTO_CAPTION_LIMIT = 1024
+
+# Reject-reason chips shown after the first ❌ tap.
+_REJECT_REASONS: dict[str, str] = {
+    "voice": "🗣 Voice",
+    "hebrew": "🇮🇱 Hebrew",
+    "image": "🖼 Image",
+    "boring": "😴 Boring",
+}
 
 
 class TelegramNotifier:
@@ -57,7 +69,7 @@ class TelegramNotifier:
         }
         async with httpx.AsyncClient(timeout=15) as client:
             if len(caption) <= _PHOTO_CAPTION_LIMIT:
-                await client.post(
+                resp = await client.post(
                     self._url("sendPhoto"),
                     data={
                         "chat_id": self._settings.telegram_chat_id,
@@ -74,13 +86,19 @@ class TelegramNotifier:
                     data={"chat_id": self._settings.telegram_chat_id},
                     files={"photo": photo_path.read_bytes()},
                 )
-                await client.post(
+                resp = await client.post(
                     self._url("sendMessage"),
                     json={
                         "chat_id": self._settings.telegram_chat_id,
                         "text": caption,
                         "reply_markup": keyboard,
                     },
+                )
+            if not resp.json().get("ok"):
+                logger.warning(
+                    "send_suggestion failed for post %s: %s",
+                    post.id,
+                    resp.json().get("description"),
                 )
 
     async def send_message(self, text: str) -> None:
@@ -100,15 +118,17 @@ class TelegramNotifier:
                 json={"callback_query_id": callback_query_id, "text": text},
             )
 
-    async def mark_decided(self, cb_message: dict, post: Post) -> None:
+    async def mark_decided(self, cb_message: dict, post: Post, reason: str | None = None) -> None:
         """Edit the reviewed message; leave the opposite button while decision is reversible."""
         if post.status == PostStatus.APPROVED:
             label = "✅ Approved"
-            keyboard = {"inline_keyboard": [[
+            keyboard: dict[str, Any] = {"inline_keyboard": [[
                 {"text": "↩︎ Reject", "callback_data": f"reject:{post.id}"}
             ]]}
         elif post.status == PostStatus.REJECTED:
             label = "❌ Rejected"
+            if reason:
+                label += f" ({reason})"
             keyboard = {"inline_keyboard": [[
                 {"text": "↩︎ Approve", "callback_data": f"approve:{post.id}"}
             ]]}
@@ -141,8 +161,49 @@ class TelegramNotifier:
         except Exception as exc:
             logger.warning("mark_decided failed: message=%s error=%s", message_id, exc)
 
+    async def show_reason_picker(self, cb_message: dict, post_id: int) -> None:
+        """Edit the message in-place to display reject-reason chips."""
+        reason_row = [
+            {"text": label, "callback_data": f"reason:{post_id}:{r}"}
+            for r, label in _REJECT_REASONS.items()
+        ]
+        keyboard = {
+            "inline_keyboard": [
+                reason_row,
+                [{"text": "Skip", "callback_data": f"reason:{post_id}:skip"}],
+            ]
+        }
+        chat_id = cb_message["chat"]["id"]
+        message_id = cb_message["message_id"]
+        is_photo = "photo" in cb_message
+        endpoint = "editMessageCaption" if is_photo else "editMessageText"
+        body_key = "caption" if is_photo else "text"
+        original = cb_message.get(body_key, "")
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(
+                    self._url(endpoint),
+                    json={
+                        "chat_id": chat_id,
+                        "message_id": message_id,
+                        body_key: f"{original}\n\nWhy reject?",
+                        "reply_markup": keyboard,
+                    },
+                )
+            if not resp.json().get("ok"):
+                logger.warning(
+                    "show_reason_picker edit rejected: message=%s description=%s",
+                    message_id,
+                    resp.json().get("description"),
+                )
+        except Exception as exc:
+            logger.warning("show_reason_picker failed: message=%s error=%s", message_id, exc)
+
 
 _TERMINAL_CB = {PostStatus.PUBLISHING, PostStatus.PUBLISHED, PostStatus.FAILED}
+
+
+# ─────────────────────────────── status helper ───────────────────────────────
 
 
 async def _build_status_summary(session: AsyncSession) -> str:
@@ -161,8 +222,8 @@ async def _build_status_summary(session: AsyncSession) -> str:
         n = counts.get(s, 0)
         if n:
             lines.append(f"  {s}: {n}")
-    queue = counts.get(PostStatus.APPROVED, 0) + counts.get(PostStatus.PUBLISHING, 0)
-    lines.append(f"\nQueue depth: {queue}")
+    queue_depth = counts.get(PostStatus.APPROVED, 0) + counts.get(PostStatus.PUBLISHING, 0)
+    lines.append(f"\nQueue depth: {queue_depth}")
     if recent:
         lines.append("\nLast published:")
         for p in recent:
@@ -171,30 +232,234 @@ async def _build_status_summary(session: AsyncSession) -> str:
     return "\n".join(lines)
 
 
+# ─────────────────────────────── command handlers ────────────────────────────
+
+
+async def _cmd_status(
+    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+) -> None:
+    await notifier.send_message(await _build_status_summary(session))
+
+
+async def _cmd_generate(
+    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+) -> None:
+    from app.pipeline import generate
+    from app.pipeline import review as _rev
+
+    n = int(args) if args.isdigit() else settings.batch_size
+    posts = await generate.generate_batch(session, n=n)
+    await _rev.send_for_review(posts, notifier)
+    await notifier.send_message(f"Generated {len(posts)} post(s) — check your review DMs.")
+
+
+async def _cmd_postnow(
+    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+) -> None:
+    from app.pipeline import publish
+
+    if args.isdigit():
+        post = await publish.publish_by_id(session, int(args))
+        if post is None:
+            await notifier.send_message(f"Post #{args} not found.")
+        elif post.status == PostStatus.PUBLISHED:
+            await notifier.send_message(f"Post #{post.id} published ✅")
+        elif post.status == PostStatus.FAILED:
+            await notifier.send_message(f"Post #{post.id} publish failed.")
+        else:
+            await notifier.send_message(f"Post #{post.id} is {post.status}, not approved.")
+    else:
+        post = await publish.publish_next(session)
+        if post is None:
+            await notifier.send_message("Queue is empty — nothing to publish.")
+        elif post.status == PostStatus.PUBLISHED:
+            await notifier.send_message(f"Post #{post.id} published ✅")
+        else:
+            await notifier.send_message(f"Post #{post.id} publish failed.")
+
+
+async def _cmd_queue(
+    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+) -> None:
+    posts = (
+        await session.scalars(
+            select(Post)
+            .where(Post.status == PostStatus.APPROVED)
+            .order_by(Post.queue_position.asc())
+        )
+    ).all()
+    if not posts:
+        await notifier.send_message("Queue is empty.")
+        return
+    lines = [f"Queue ({len(posts)} post(s)):"]
+    for p in posts:
+        preview = (p.caption_he[:60] + "…") if len(p.caption_he) > 60 else p.caption_he
+        lines.append(f"  #{p.id} [pos {p.queue_position}] {preview}")
+    await notifier.send_message("\n".join(lines))
+
+
+async def _cmd_requeue(
+    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+) -> None:
+    from app.pipeline import queue
+
+    if not args.isdigit():
+        await notifier.send_message("Usage: /requeue <id>")
+        return
+    post = await session.get(Post, int(args))
+    if post is None:
+        await notifier.send_message(f"Post #{args} not found.")
+        return
+    if post.status != PostStatus.FAILED:
+        await notifier.send_message(f"Post #{post.id} is {post.status}, not failed.")
+        return
+    await queue.requeue(session, post)
+    await session.commit()
+    await notifier.send_message(f"Post #{post.id} requeued at position {post.queue_position}.")
+
+
+async def _cmd_pending(
+    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+) -> None:
+    from app.pipeline import review as _rev
+
+    posts = (await session.scalars(select(Post).where(Post.status == PostStatus.SUGGESTED))).all()
+    if not posts:
+        await notifier.send_message("No pending posts.")
+        return
+    await notifier.send_message(f"Resending {len(posts)} pending post(s)…")
+    await _rev.send_for_review(list(posts), notifier)
+
+
+_COMMANDS: dict[str, Any] = {
+    "/status": _cmd_status,
+    "/generate": _cmd_generate,
+    "/postnow": _cmd_postnow,
+    "/queue": _cmd_queue,
+    "/requeue": _cmd_requeue,
+    "/pending": _cmd_pending,
+}
+
+
+# ─────────────────────────────── photo upload ────────────────────────────────
+
+
+async def _handle_photo_upload(
+    notifier: TelegramNotifier, msg: dict, settings: Settings
+) -> None:
+    photo = msg.get("photo", [])
+    if not photo:
+        return
+    file_id = photo[-1]["file_id"]  # largest size is last
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(notifier._url("getFile"), params={"file_id": file_id})
+        data = resp.json()
+        if not data.get("ok"):
+            logger.warning("getFile failed: %s", data)
+            await notifier.send_message("Failed to retrieve photo from Telegram.")
+            return
+        file_path = data["result"]["file_path"]
+        dl_url = f"https://api.telegram.org/file/bot{settings.telegram_bot_token}/{file_path}"
+        img_resp = await client.get(dl_url)
+
+    stock_dir = Path(settings.stock_images_dir)
+    stock_dir.mkdir(parents=True, exist_ok=True)
+    filename = Path(file_path).name
+    dest = stock_dir / filename
+    dest.write_bytes(img_resp.content)
+    await notifier.send_message(f"Photo saved to stock library as {filename}.")
+    logger.info("Photo uploaded to stock: %s", dest)
+
+
+# ─────────────────────────────── message dispatcher ──────────────────────────
+
+
 async def process_message(
     session: AsyncSession, notifier: TelegramNotifier, msg: dict, settings: Settings
 ) -> None:
-    """Handle an incoming plain message. Only /status from the owner chat is acted on."""
-    text = msg.get("text", "")
-    if not text.startswith("/status"):
-        return
+    """Route an incoming plain message. Owner-gated commands and photo uploads are handled."""
     chat_id = str(msg.get("chat", {}).get("id", ""))
-    if chat_id != str(settings.telegram_chat_id):
-        logger.warning("Ignoring /status from non-owner chat %s.", chat_id)
+    is_owner = chat_id == str(settings.telegram_chat_id)
+
+    text = (msg.get("text") or "").strip()
+    if text.startswith("/"):
+        if not is_owner:
+            logger.warning("Ignoring command from non-owner chat %s.", chat_id)
+            return
+        cmd, _, args = text.partition(" ")
+        cmd = cmd.split("@")[0].lower()
+        handler = _COMMANDS.get(cmd)
+        if handler:
+            await handler(session, notifier, args.strip(), settings)
         return
-    summary = await _build_status_summary(session)
-    await notifier.send_message(summary)
+
+    if msg.get("photo") and is_owner:
+        await _handle_photo_upload(notifier, msg, settings)
+
+
+# ─────────────────────────────── callback handler ────────────────────────────
 
 
 async def process_callback(session: AsyncSession, notifier: TelegramNotifier, cb: dict) -> None:
-    """Parse a Telegram callback query, apply the decision, update the message, and toast."""
-    parsed = parse_callback(cb.get("data", ""))
+    """Parse a Telegram callback query and route to approve or two-step reject."""
+    data = cb.get("data", "")
+
+    # ── Step 1: ❌ tap → show reason picker ──────────────────────────────────
+    if data.startswith("reject:"):
+        raw_id = data.removeprefix("reject:")
+        if not raw_id.isdigit():
+            return
+        post_id = int(raw_id)
+        post = await session.get(Post, post_id)
+        if post is None:
+            await notifier.answer_callback(cb["id"], "Post not found")
+            return
+        if post.status in _TERMINAL_CB:
+            await notifier.answer_callback(cb["id"], "Can't change — already published")
+            await notifier.mark_decided(cb["message"], post)
+            return
+        await notifier.answer_callback(cb["id"], "Why reject?")
+        await notifier.show_reason_picker(cb["message"], post_id)
+        logger.info("callback post_id=%s action=reject -> showing reason picker", post_id)
+        return
+
+    # ── Step 2: reason tap → reject with (optional) reason ───────────────────
+    if data.startswith("reason:"):
+        parts = data.split(":", 2)
+        if len(parts) != 3 or not parts[1].isdigit():
+            return
+        post_id, reason_str = int(parts[1]), parts[2]
+        reason: str | None = None if reason_str == "skip" else reason_str
+
+        pre = await session.get(Post, post_id)
+        pre_status = pre.status if pre is not None else None
+        post = await handle_decision(session, post_id, "reject", reason=reason)
+
+        if post is None:
+            await notifier.answer_callback(cb["id"], "Post not found")
+            return
+        if pre_status in _TERMINAL_CB and pre_status == post.status:
+            toast = "Can't change — already published"
+        elif pre_status == post.status:
+            toast = f"Already {post.status}"
+        else:
+            toast = "❌ Rejected" + (f" ({reason_str})" if reason else "")
+
+        await notifier.mark_decided(cb["message"], post, reason=reason)
+        logger.info(
+            "callback post_id=%s decision=reject reason=%s status=%s toast=%r",
+            post_id, reason_str, post.status, toast,
+        )
+        await notifier.answer_callback(cb["id"], toast)
+        return
+
+    # ── Approve flow ──────────────────────────────────────────────────────────
+    parsed = parse_callback(data)
     if not parsed:
         return
     decision, post_id = parsed
-    # ponytail: pre-fetch hits the identity map in handle_decision; no extra DB round-trip
     pre = await session.get(Post, post_id)
-    pre_status = pre.status if pre is not None else None  # capture before handle_decision mutates
+    pre_status = pre.status if pre is not None else None
     post = await handle_decision(session, post_id, decision)
 
     if post is None:
@@ -204,25 +469,22 @@ async def process_callback(session: AsyncSession, notifier: TelegramNotifier, cb
     elif pre_status == post.status:
         toast = f"Already {post.status}"
     else:
-        toast = "✅ Approved" if post.status == PostStatus.APPROVED else "❌ Rejected"
+        toast = "✅ Approved"
 
     if post is not None:
         await notifier.mark_decided(cb["message"], post)
 
     logger.info(
         "callback post_id=%s decision=%s status=%s toast=%r",
-        post_id,
-        decision,
-        post.status if post else None,
-        toast,
+        post_id, decision, post.status if post else None, toast,
     )
     await notifier.answer_callback(cb["id"], toast)
 
 
 def parse_callback(data: str) -> tuple[str, int] | None:
-    """Parse ``approve:<id>`` / ``reject:<id>`` into ``(decision, post_id)``."""
+    """Parse ``approve:<id>`` into ``(decision, post_id)``. Reject/reason are handled separately."""
     action, _, raw_id = data.partition(":")
-    if action not in {"approve", "reject"} or not raw_id.isdigit():
+    if action != "approve" or not raw_id.isdigit():
         return None
     return action, int(raw_id)
 
@@ -257,7 +519,7 @@ async def _poll() -> None:
     settings = get_settings()
     notifier = TelegramNotifier(settings)
     offset = 0
-    logger.info("Polling Telegram for review decisions… (Ctrl-C to stop)")
+    logger.info("Polling Telegram for updates… (Ctrl-C to stop)")
     async with httpx.AsyncClient(timeout=40) as client:
         while True:
             resp = await client.get(

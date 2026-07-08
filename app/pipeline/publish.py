@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Post, PostStatus
 from app.pipeline import queue
-from app.publishers.base import Publisher, get_publishers
+from app.publishers.base import Publisher, PublishResult, get_publishers
 
 logger = logging.getLogger(__name__)
 
@@ -36,18 +36,13 @@ async def recover_orphaned(session: AsyncSession) -> int:
     return len(posts)
 
 
-async def publish_next(
+async def _do_publish(
     session: AsyncSession,
+    post: Post,
     publishers: list[Publisher] | None = None,
-) -> Post | None:
-    """Publish the next approved post to all networks. Returns the post, or None if empty."""
-    post = await queue.peek_next(session)
-    if post is None:
-        logger.info("Posting slot fired but the queue is empty — nothing to publish.")
-        return None
-
+) -> Post:
+    """Claim and publish post. Caller ensures post is APPROVED."""
     # ponytail: peek→claim not atomic; SELECT … FOR UPDATE SKIP LOCKED on Postgres if multi-worker
-    # Claim the post before any network call (idempotency guard).
     post.status = PostStatus.PUBLISHING
     await session.commit()
 
@@ -58,8 +53,6 @@ async def publish_next(
             results.append(await publisher.publish(post))
         except Exception as exc:  # noqa: BLE001 — record per-network failure, keep going
             logger.exception("Publisher %s failed for post %s.", publisher.name, post.id)
-            from app.publishers.base import PublishResult
-
             results.append(PublishResult(network=publisher.name, ok=False, detail=str(exc)))
 
     if results and all(r.ok for r in results):
@@ -73,3 +66,27 @@ async def publish_next(
     await session.commit()
     await session.refresh(post)
     return post
+
+
+async def publish_next(
+    session: AsyncSession,
+    publishers: list[Publisher] | None = None,
+) -> Post | None:
+    """Publish the next approved post to all networks. Returns the post, or None if empty."""
+    post = await queue.peek_next(session)
+    if post is None:
+        logger.info("Posting slot fired but the queue is empty — nothing to publish.")
+        return None
+    return await _do_publish(session, post, publishers)
+
+
+async def publish_by_id(
+    session: AsyncSession,
+    post_id: int,
+    publishers: list[Publisher] | None = None,
+) -> Post | None:
+    """Publish a specific approved post by ID. Returns post unchanged (not None) if not APPROVED."""
+    post = await session.get(Post, post_id)
+    if post is None or post.status != PostStatus.APPROVED:
+        return post
+    return await _do_publish(session, post, publishers)

@@ -21,7 +21,8 @@ def build_scheduler(
     settings: Settings,
 ) -> AsyncIOScheduler:
     """Create a scheduler with the generation cron and one job per posting slot."""
-    scheduler = AsyncIOScheduler(timezone="UTC")
+    tz = settings.schedule_tz
+    scheduler = AsyncIOScheduler(timezone=tz)
 
     async def generation_tick() -> None:
         async with sessionmaker() as session:
@@ -34,16 +35,18 @@ def build_scheduler(
 
     scheduler.add_job(
         generation_tick,
-        CronTrigger.from_crontab(settings.generation_cron, timezone="UTC"),
+        CronTrigger.from_crontab(settings.generation_cron, timezone=tz),
         id="generation",
         replace_existing=True,
+        misfire_grace_time=300,
     )
     for hh, mm in settings.posting_slots_list:
         scheduler.add_job(
             posting_tick,
-            CronTrigger(hour=hh, minute=mm, timezone="UTC"),
+            CronTrigger(hour=hh, minute=mm, timezone=tz),
             id=f"posting-{hh:02d}{mm:02d}",
             replace_existing=True,
+            misfire_grace_time=3600,
         )
 
     logger.info(

@@ -22,13 +22,18 @@ logger = logging.getLogger(__name__)
 async def send_for_review(posts: Sequence[Post], notifier: Notifier) -> None:
     """DM every suggestion to the reviewer with Approve/Reject controls."""
     for post in posts:
-        await notifier.send_suggestion(post)
+        try:
+            await notifier.send_suggestion(post)
+        except Exception:
+            logger.exception("Failed to send post %s for review.", post.id)
 
 
 _TERMINAL = {PostStatus.PUBLISHING, PostStatus.PUBLISHED, PostStatus.FAILED}
 
 
-async def handle_decision(session: AsyncSession, post_id: int, decision: str) -> Post | None:
+async def handle_decision(
+    session: AsyncSession, post_id: int, decision: str, reason: str | None = None
+) -> Post | None:
     """Apply an approve/reject decision, allowing reversals on pre-publish posts.
 
     - SUGGESTED → approve/reject as normal.
@@ -56,7 +61,7 @@ async def handle_decision(session: AsyncSession, post_id: int, decision: str) ->
         logger.info("Post %s already %s — no-op.", post_id, post.status)
         return post
 
-    session.add(Feedback(post_id=post.id, decision=dec))
+    session.add(Feedback(post_id=post.id, decision=dec, reason=reason))
     post.decided_at = datetime.now(UTC)
 
     if dec is Decision.APPROVE:
