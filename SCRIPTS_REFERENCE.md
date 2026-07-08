@@ -65,6 +65,20 @@ python -m app.notifier.telegram set-webhook
 python -m app.notifier.telegram delete-webhook
 ```
 
+## Model eval (Hebrew quality bake-off)
+
+```bash
+# Same images + brand file across candidate models, side-by-side Markdown for review.
+# Keys come from .env; a candidate without its provider key yields the offline stub.
+python -m scripts.eval_models                          # default candidate list
+python -m scripts.eval_models --models anthropic/claude-sonnet-4-6,openai/gpt-5.1
+python -m scripts.eval_models --images 5 --out eval_results.md
+```
+
+Review the output natively, then record the decision in `DEV_GUIDELINES.md`
+("Model decision") and update `PRODUCT_SPEC.md` + `env.example` if the winner
+isn't Claude.
+
 ## Quality gates
 
 ```bash

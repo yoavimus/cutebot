@@ -15,7 +15,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from app.config import Settings, get_settings
+from app.config import Settings
 from app.schemas import PostSuggestion
 from app.stock import load_image_b64
 
@@ -55,14 +55,14 @@ Return a JSON object of this exact shape:
 """
 
 
-def _provider_key() -> str | None:
-    """The API key for the configured provider, or None if not set.
+def _provider_key(s: Settings) -> str | None:
+    """The API key for ``s.default_llm_model``'s provider, or None if not set.
 
     LiteLLM reads keys from ``os.environ`` only — pydantic-settings loads them into the
     ``Settings`` object, not the environment — so we pass the key explicitly to
-    ``acompletion`` rather than relying on env lookup.
+    ``acompletion`` rather than relying on env lookup. Keyed off the *passed* settings so
+    callers (e.g. scripts/eval_models.py) can sweep models without touching the global.
     """
-    s = get_settings()
     model = s.default_llm_model
     if model.startswith("anthropic/"):
         return s.anthropic_api_key or None
@@ -71,11 +71,9 @@ def _provider_key() -> str | None:
     return None
 
 
-def _has_provider_key() -> bool:
-    s = get_settings()
-    model = s.default_llm_model
-    if model.startswith(("anthropic/", "openai/", "gpt")):
-        return _provider_key() is not None
+def _has_provider_key(s: Settings) -> bool:
+    if s.default_llm_model.startswith(("anthropic/", "openai/", "gpt")):
+        return _provider_key(s) is not None
     # Unknown provider — assume the env is configured for it.
     return True
 
@@ -91,7 +89,7 @@ def _stub_suggestion(image_path: Path) -> PostSuggestion:
 
 async def caption_image(brand: str, image_path: Path, settings: Settings) -> PostSuggestion:
     """Caption ``image_path`` (vision) in the brand's voice. One call per image."""
-    if not _has_provider_key():
+    if not _has_provider_key(settings):
         logger.warning("No LLM provider key configured — returning a stub suggestion.")
         return _stub_suggestion(image_path)
 
@@ -119,7 +117,7 @@ async def caption_image(brand: str, image_path: Path, settings: Settings) -> Pos
         num_retries=settings.llm_num_retries,
         # LiteLLM only reads keys from os.environ; pass explicitly since pydantic-settings
         # loads them into Settings, not the environment.
-        api_key=_provider_key(),
+        api_key=_provider_key(settings),
     )
     content = response["choices"][0]["message"]["content"]
     try:
