@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.db import SessionLocal, get_session, init_db
 from app.models import Post, PostStatus
-from app.notifier.telegram import TelegramNotifier, _set_webhook, process_callback
+from app.notifier.telegram import TelegramNotifier, _set_webhook, process_callback, process_message
 from app.pipeline import generate, publish, queue, review
 from app.scheduler import build_scheduler
 
@@ -62,12 +62,15 @@ async def telegram_webhook(
         raise HTTPException(status_code=403, detail="bad webhook secret")
 
     update = await request.json()
-    cb = update.get("callback_query")
-    if not cb:
-        return {"ok": True, "ignored": "no callback_query"}
-
     notifier: TelegramNotifier = request.app.state.notifier
-    await process_callback(session, notifier, cb)
+    cb = update.get("callback_query")
+    msg = update.get("message")
+    if cb:
+        await process_callback(session, notifier, cb)
+    elif msg:
+        await process_message(session, notifier, msg, settings)
+    else:
+        return {"ok": True, "ignored": "no callback_query or message"}
     return {"ok": True}
 
 

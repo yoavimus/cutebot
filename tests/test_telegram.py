@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import llm, stock
 from app.config import Settings
 from app.models import Post, PostStatus
-from app.notifier.telegram import process_callback
+from app.notifier.telegram import process_callback, process_message
 from app.pipeline import generate
 from app.schemas import PostSuggestion
 
@@ -19,12 +19,16 @@ class _FakeNotifier:
     def __init__(self) -> None:
         self.marks: list[tuple[dict, Post]] = []
         self.toasts: list[tuple[str, str]] = []
+        self.messages: list[str] = []
 
     async def mark_decided(self, cb_message: dict, post: Post) -> None:
         self.marks.append((cb_message, post))
 
     async def answer_callback(self, callback_query_id: str, text: str) -> None:
         self.toasts.append((callback_query_id, text))
+
+    async def send_message(self, text: str) -> None:
+        self.messages.append(text)
 
 
 def _photo_cb(post_id: int, decision: str) -> dict:
@@ -142,6 +146,41 @@ async def test_flip_reject_to_approve_callback(session: AsyncSession) -> None:
     await process_callback(session, notifier, _photo_cb(posts[0].id, "approve"))
     assert notifier.toasts[1][1] == "✅ Approved"
     assert notifier.marks[1][1].status == PostStatus.APPROVED
+
+
+def _msg(chat_id: int, text: str) -> dict:
+    return {"chat": {"id": chat_id}, "text": text}
+
+
+_OWNER_ID = 42
+_OWNER_SETTINGS = Settings(
+    telegram_bot_token="tok",
+    telegram_chat_id=str(_OWNER_ID),
+    stock_images_dir="stock",
+    brand_file="brand.md",
+)
+
+
+async def test_status_owner_gets_summary(session: AsyncSession) -> None:
+    await generate.generate_batch(session, n=2, brand="b")
+    notifier = _FakeNotifier()
+    await process_message(session, notifier, _msg(_OWNER_ID, "/status"), _OWNER_SETTINGS)
+    assert len(notifier.messages) == 1
+    assert "suggested" in notifier.messages[0]
+    assert "2" in notifier.messages[0]
+
+
+async def test_status_non_owner_refused(session: AsyncSession) -> None:
+    await generate.generate_batch(session, n=1, brand="b")
+    notifier = _FakeNotifier()
+    await process_message(session, notifier, _msg(999, "/status"), _OWNER_SETTINGS)
+    assert notifier.messages == []
+
+
+async def test_non_command_ignored(session: AsyncSession) -> None:
+    notifier = _FakeNotifier()
+    await process_message(session, notifier, _msg(_OWNER_ID, "hello"), _OWNER_SETTINGS)
+    assert notifier.messages == []
 
 
 async def test_published_post_cannot_be_flipped_callback(session: AsyncSession) -> None:

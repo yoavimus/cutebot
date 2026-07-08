@@ -17,6 +17,7 @@ import logging
 import sys
 
 import httpx
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
@@ -82,6 +83,16 @@ class TelegramNotifier:
                     },
                 )
 
+    async def send_message(self, text: str) -> None:
+        if not self._settings.telegram_bot_token or not self._settings.telegram_chat_id:
+            logger.warning("Telegram not configured — skipping send_message.")
+            return
+        async with httpx.AsyncClient(timeout=15) as client:
+            await client.post(
+                self._url("sendMessage"),
+                json={"chat_id": self._settings.telegram_chat_id, "text": text},
+            )
+
     async def answer_callback(self, callback_query_id: str, text: str) -> None:
         async with httpx.AsyncClient(timeout=15) as client:
             await client.post(
@@ -132,6 +143,47 @@ class TelegramNotifier:
 
 
 _TERMINAL_CB = {PostStatus.PUBLISHING, PostStatus.PUBLISHED, PostStatus.FAILED}
+
+
+async def _build_status_summary(session: AsyncSession) -> str:
+    rows = (await session.execute(select(Post.status, func.count()).group_by(Post.status))).all()
+    counts: dict[PostStatus, int] = {r[0]: r[1] for r in rows}
+    recent = (
+        await session.scalars(
+            select(Post)
+            .where(Post.status == PostStatus.PUBLISHED)
+            .order_by(Post.published_at.desc())
+            .limit(5)
+        )
+    ).all()
+    lines = ["Pipeline status"]
+    for s in PostStatus:
+        n = counts.get(s, 0)
+        if n:
+            lines.append(f"  {s}: {n}")
+    queue = counts.get(PostStatus.APPROVED, 0) + counts.get(PostStatus.PUBLISHING, 0)
+    lines.append(f"\nQueue depth: {queue}")
+    if recent:
+        lines.append("\nLast published:")
+        for p in recent:
+            ts = p.published_at.strftime("%Y-%m-%d %H:%M UTC") if p.published_at else "?"
+            lines.append(f"  #{p.id} — {ts}")
+    return "\n".join(lines)
+
+
+async def process_message(
+    session: AsyncSession, notifier: TelegramNotifier, msg: dict, settings: Settings
+) -> None:
+    """Handle an incoming plain message. Only /status from the owner chat is acted on."""
+    text = msg.get("text", "")
+    if not text.startswith("/status"):
+        return
+    chat_id = str(msg.get("chat", {}).get("id", ""))
+    if chat_id != str(settings.telegram_chat_id):
+        logger.warning("Ignoring /status from non-owner chat %s.", chat_id)
+        return
+    summary = await _build_status_summary(session)
+    await notifier.send_message(summary)
 
 
 async def process_callback(session: AsyncSession, notifier: TelegramNotifier, cb: dict) -> None:
@@ -215,10 +267,13 @@ async def _poll() -> None:
             for update in resp.json().get("result", []):
                 offset = update["update_id"] + 1
                 cb = update.get("callback_query")
-                if not cb:
-                    continue
-                async with SessionLocal() as session:
-                    await process_callback(session, notifier, cb)
+                msg = update.get("message")
+                if cb:
+                    async with SessionLocal() as session:
+                        await process_callback(session, notifier, cb)
+                elif msg:
+                    async with SessionLocal() as session:
+                        await process_message(session, notifier, msg, settings)
 
 
 def main() -> None:
