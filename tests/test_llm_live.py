@@ -19,7 +19,7 @@ pytestmark = pytest.mark.live
 
 async def test_caption_image_returns_bilingual_output() -> None:
     settings = get_settings()
-    if not _has_provider_key():
+    if not _has_provider_key(settings):
         pytest.skip("No LLM provider key configured")
 
     stock_dir = Path(settings.stock_images_dir)

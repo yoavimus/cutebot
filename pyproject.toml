@@ -34,3 +34,6 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 markers = ["live: opt-in integration tests requiring real API keys (skipped in CI)"]
+# Plain `pytest` is offline-only; live tests are opt-in via `pytest -m live`.
+# Without this filter every local run with a real key made a paid API call.
+addopts = "-m 'not live'"
