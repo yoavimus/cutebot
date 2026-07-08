@@ -21,6 +21,9 @@ publishes them on a fixed schedule — learning from every approve/reject.
   excellent Hebrew is a hard requirement. Language preferences are config-driven and
   will be changeable later.
 
+> Untriaged ideas do not live in this spec — drop them in the **Backlog** section of
+> `ROADMAP.md`; they graduate into milestones from there.
+
 ## 2. The four-stage cycle
 
 | Stage | Trigger | Module | Output |

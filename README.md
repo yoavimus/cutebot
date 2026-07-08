@@ -51,6 +51,7 @@ uv pip install -r requirements.txt
 
 # 2. Configure
 cp env.example .env        # then fill in ANTHROPIC_API_KEY, DATABASE_URL, TELEGRAM_*
+cp brand.example.md brand.md                              # then write your brand voice
 mkdir -p stock && cp /path/to/your/images/*.jpg stock/   # drop in your stock images
 
 # 3. Run the API + scheduler
@@ -65,9 +66,12 @@ inventory.
 
 ## Status
 
-🚧 **Skeleton / scaffold.** The pipeline stages, models, scheduler, and Telegram
-notifier are wired with clear extension points; LLM generation and social publishing
-are functional stubs ready to be filled in. See `PRODUCT_SPEC.md` §Roadmap.
+✅ **v1 shipped and running in production** (Railway). The full
+generate → review → queue → publish loop runs autonomously: image-first vision
+captioning (Hebrew + English), Telegram review with reversible Approve/Reject,
+`/status` command, and scheduled publishing. Publishers are still **logging stubs** —
+the first real network integration (Instagram) is the next major milestone. See
+`ROADMAP.md` for sequencing and `PRODUCT_SPEC.md` for scope.
 
 ## License
 

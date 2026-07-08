@@ -39,24 +39,24 @@ is M0.
 
 The headline of v1. Reorder generation to *image → caption* with vision.
 
-- [ ] `Post`: add `image_ref`, `caption_he`, `caption_en` (replacing the single
+- [x] `Post`: add `image_ref`, `caption_he`, `caption_en` (replacing the single
       `caption`); introduce **Alembic** and write the first migration.
-- [ ] Config + `env.example`: `STOCK_IMAGES_DIR`, `PRIMARY_LANGUAGE` (default `he`),
+- [x] Config + `env.example`: `STOCK_IMAGES_DIR`, `PRIMARY_LANGUAGE` (default `he`),
       `SECONDARY_LANGUAGES` (default `en`), `POST_DISCLAIMER` (cute bilingual default).
-- [ ] `app/stock.py` — enumerate the stock library, pick an unused image per post.
-- [ ] `app/disclaimer.py` — compose the disclosure line from the template; one helper
+- [x] `app/stock.py` — enumerate the stock library, pick an unused image per post.
+- [x] `app/disclaimer.py` — compose the disclosure line from the template; one helper
       used by both review and publish so the guarantee lives in one place.
-- [ ] Rework `app/llm.py`: take an image, return `caption_he`/`caption_en`/
+- [x] Rework `app/llm.py`: take an image, return `caption_he`/`caption_en`/
       `visual_concept`/`rationale` via a **multimodal** Claude call; prompt demands
       native-quality Hebrew (primary) + English; offline stub returns both languages.
-- [ ] `generate.py`: select image → caption it (bilingual) → persist with `image_ref`.
-- [ ] `app/schemas.py`: `PostSuggestion` carries `caption_he`/`caption_en`; input carries
+- [x] `generate.py`: select image → caption it (bilingual) → persist with `image_ref`.
+- [x] `app/schemas.py`: `PostSuggestion` carries `caption_he`/`caption_en`; input carries
       the chosen image.
-- [ ] Telegram `sendPhoto` (image + Hebrew & English caption + disclaimer +
+- [x] Telegram `sendPhoto` (image + Hebrew & English caption + disclaimer +
       Approve/Reject) so the reviewer sees the real, final post.
-- [ ] Publishers compose the final caption (he + en + disclaimer) and carry `image_ref`
+- [x] Publishers compose the final caption (he + en + disclaimer) and carry `image_ref`
       through `publish()` (stubs log it).
-- [ ] Tests: image-first path; **assert the disclaimer is present** on every rendered and
+- [x] Tests: image-first path; **assert the disclaimer is present** on every rendered and
       published caption; assert both language fields are populated. Keep the suite offline.
 
 **DoD:** `/dev/generate` produces posts each bound to a real stock image with a
@@ -105,7 +105,7 @@ correct state transitions; a crash mid-publish self-heals, never double-posts.
 
 ## M4 — Ship v1 to Railway
 
-> Shipped ✅ & **verified in prod** — plan at **`M4_PLAN.md`**.
+> Shipped ✅ & **verified in prod** — plan archived at **`docs/archive/M4_PLAN.md`**.
 
 - [x] Postgres URL normalization (`app/db.py`: coerces `postgresql://`/`postgres://` → `+asyncpg`).
 - [x] `Procfile` + `railway.toml`: `alembic upgrade head && uvicorn … --host 0.0.0.0 --port $PORT`.
@@ -133,12 +133,34 @@ correct state transitions; a crash mid-publish self-heals, never double-posts.
 
 ---
 
-## Post-v1 (PRODUCT_SPEC §8, resequenced by value)
+## Post-v1 (decided 2026-07-08 — see `docs/POST_V1_REVIEW.md` for the reasoning)
 
-1. **A — learning loop v2** — few-shot from accumulated approvals; learn from rejections.
-2. **C — inline editing** — "Approve with edits" as a stronger training signal.
-3. **E — first real publisher** (one network: Instagram Graph or X) with OAuth + media upload. turns stub-publish into real reach.
-4. **D — more review channels** — Discord/Slack notifier adapters.
-5. **F — analytics feedback** — pull post performance back as a generation signal.
-6. **G — multi-brand / multi-tenant** — scope everything by `brand_id`.
-7. **B — image generation** — *deferred for the foreseeable future* (v1 is stock-image).
+Standing task (not a milestone): **model eval** — `scripts/eval_models.py` bake-off,
+native Hebrew review by the owner. Round 1: Claude Sonnet / Claude Opus / same-tier
+GPT (pending Anthropic credits); round 2 adds Gemini. Resolves the DEV_GUIDELINES
+"Model decision" open item.
+
+1. **M6 — operator console & feedback signal** (small–medium): full Telegram command
+   set (`/generate [N]`, `/postnow [id]`, `/queue`, `/requeue <id>`, `/pending`,
+   photo-upload-to-stock), one-tap **reject reasons** (voice / Hebrew / image / boring
+   + skip; new `Feedback.reason` column), timezone-aware posting slots
+   (`SCHEDULE_TZ`, default `Asia/Jerusalem`), posting-slot misfire catch-up, and
+   review-DM send-failure logging. Plan: **`M6_PLAN.md`**.
+2. **M7 — first real publisher: Instagram** (spec E; medium–large): Instagram Graph
+   API with OAuth + media upload; carousel/multi-image design decided here (schema:
+   post-images table). **Meta business-verification / app-review paperwork starts
+   during M6** — weeks of external lead time.
+3. **M8 — learning loop v1** (spec A; medium): few-shot from accumulated approvals +
+   reject-reason conditioning; recent-post memory ("don't repeat these"); measured
+   with the eval harness. **Brand distillation** (strong model proposes `brand.md`
+   diffs from feedback, owner approves in Telegram) lands here or M9.
+4. **Later, relative order unchanged:** C — approve-with-edits → D — more review
+   channels (re-aimed at **WhatsApp Business** for the Israeli market, not
+   Discord/Slack) → F — analytics feedback → G — multi-tenant → B — image generation
+   (*deferred for the foreseeable future*).
+
+## Backlog (untriaged)
+
+> Ideas land here (not in PRODUCT_SPEC); milestones graduate out of it.
+
+- *(empty — the 2026-07-08 review triaged everything into the sequence above)*

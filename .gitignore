@@ -51,3 +51,6 @@ desktop.ini
 # personal
 yoav_personal.txt
 cutebot_description.txt
+
+# WSL/Windows download metadata
+*Zone.Identifier

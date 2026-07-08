@@ -11,6 +11,22 @@ jobs:
     name: Lint · Type · Test
     runs-on: ubuntu-latest
 
+    # Postgres is only used by the migration drift check — tests stay on SQLite.
+    # (Migrations are Postgres-flavored: 0002 uses ALTER COLUMN ... TYPE.)
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cutebot
+          POSTGRES_PASSWORD: cutebot
+          POSTGRES_DB: cutebot
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U cutebot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     env:
       # Tests run against in-memory SQLite — no DB service needed.
       DATABASE_URL: "sqlite+aiosqlite:///:memory:"
@@ -38,3 +54,10 @@ jobs:
 
       - name: Test
         run: python -m pytest -v
+
+      - name: Migration drift check (alembic)
+        env:
+          DATABASE_URL: "postgresql+asyncpg://cutebot:cutebot@localhost:5432/cutebot"
+        run: |
+          python -m alembic upgrade head
+          python -m alembic check

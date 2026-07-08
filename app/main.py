@@ -11,7 +11,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.db import SessionLocal, get_session, init_db
 from app.models import Post, PostStatus
 from app.notifier.telegram import TelegramNotifier, _set_webhook, process_callback, process_message
@@ -21,9 +21,19 @@ from app.scheduler import build_scheduler
 logger = logging.getLogger(__name__)
 
 
+def check_prod_config(settings: Settings) -> None:
+    """Refuse to boot in production with the guessable default webhook secret."""
+    if not settings.is_dev and settings.telegram_webhook_secret == "cutebot-webhook-secret":
+        raise RuntimeError(
+            "TELEGRAM_WEBHOOK_SECRET is still the default value — set a random secret "
+            "before running in production (anyone could forge webhook callbacks)."
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
+    check_prod_config(settings)
     if settings.is_dev:
         await init_db()
     async with SessionLocal() as session:

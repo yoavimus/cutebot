@@ -67,14 +67,15 @@ punctuation mis-placed.
 3. If Sonnet fails after prompt tuning → try `anthropic/claude-opus-4-8` and record the
    cost/quality trade-off here before changing the default.
 
-**Model decision — UNRESOLVED (open item as of M1 ship, revisit before M4).**
-Live testing found **GPT-4o clears the Hebrew gate**. But the coded default is still
-`anthropic/claude-sonnet-4-6` (`app/config.py`) and the architecture (CLAUDE.md,
-PRODUCT_SPEC §3) is Claude-via-LiteLLM by design. Switching the runtime to GPT-4o would be
-a **spec deviation** — do not treat it as decided. Options still on the table:
-(a) stay on Claude, tune the prompt / try `claude-opus-4-8`; (b) formally adopt GPT-4o and
-update PRODUCT_SPEC + CLAUDE.md + the config default to match. Pick one before shipping v1;
-until then the runtime is whatever `DEFAULT_LLM_MODEL` says (Claude Sonnet).
+**Model decision — process decided 2026-07-08 (outcome pending eval run).**
+The choice will be made empirically with `scripts/eval_models.py`: same stock images ×
+same brand file across same-tier candidates from different providers, output reviewed
+side-by-side by the owner (native Hebrew speaker). Round 1 = Claude Sonnet / Claude
+Opus / same-tier GPT (waiting on Anthropic API credits); round 2 adds Gemini. Until the
+eval concludes, the runtime stays whatever `DEFAULT_LLM_MODEL` says (Claude Sonnet).
+If the winner isn't Claude, update PRODUCT_SPEC §3 + CLAUDE.md + the config default
+together — a silent switch is a spec deviation. Record the cost/quality trade-off here
+once decided. (Background: docs/POST_V1_REVIEW.md §3.1.)
 
 ## RPER
 
