@@ -120,18 +120,16 @@ correct state transitions; a crash mid-publish self-heals, never double-posts.
 
 ## M5 — Post-v1 usability & operability
 
-> Shipped ✅ — tickets CUT-35 through CUT-40. One follow-up open: **M5.6 (CUT-41)** —
-> M5.2's status view is dev-only (404 in prod); a prod-safe Telegram `/status` is needed
-> for real operability + to verify M4.
+> Shipped ✅ — tickets CUT-35 through CUT-41.
 
 - [x] **M5.1** — brand file switched from YAML to Markdown (`brand.example.md`; config default + `env.example` updated; code was already `read_text` verbatim).
-- [x] **M5.2** — `GET /dev/status` (20 most-recent posts, optional `?status=` filter); `POST /dev/run-cycle` (generate→auto-approve→publish in one call); `/dev/generate` and `/dev/publish-next` return full post objects instead of just IDs. ⚠️ **dev-only (404 in prod)** — prod-safe read tracked in M5.6/CUT-41.
+- [x] **M5.2** — `GET /dev/status` (20 most-recent posts, optional `?status=` filter); `POST /dev/run-cycle` (generate→auto-approve→publish in one call); `/dev/generate` and `/dev/publish-next` return full post objects instead of just IDs.
 - [x] **M5.3** — `select_images` uses `random.sample`; only images tied to APPROVED/PUBLISHING/PUBLISHED posts are blocked — rejected/suggested images are free again.
 - [x] **M5.4** — `handle_decision` allows APPROVED↔REJECTED flips (each writes a Feedback row); PUBLISHING/PUBLISHED hard-blocked. Telegram `mark_decided` leaves the opposite button until a post publishes.
 - [x] **M5.5** — `GENERATION_CRON` and `POSTING_SLOTS` documented in `env.example` and `SCRIPTS_REFERENCE.md` (edit + redeploy; times are UTC).
-- [ ] **M5.6** (CUT-41) — prod-safe pipeline status via owner-authenticated Telegram `/status`; unblocks M4 verification (CUT-34).
+- [x] **M5.6** — Telegram `/status` command: DM the bot `/status` → counts by status, queue depth, last 5 published posts. Owner-gated; works via webhook and long-poll. Makes prod state visible without DB access.
 
-**DoD:** pipeline is pleasant to operate — status visible in one curl, decisions reversible, images random, brand file editable by non-technical owners. *(Status is visible in dev; prod observability lands with M5.6.)*
+**DoD:** pipeline is pleasant to operate — status visible in one curl (dev) or Telegram `/status` (prod), decisions reversible, images random, brand file editable by non-technical owners.
 
 ---
 
