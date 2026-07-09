@@ -25,6 +25,17 @@ review channels, real publishers, analytics, multi-tenant.
 - When touching LLM code, consult the `claude-api` skill for current model IDs and API
   shape — do not answer model questions from memory.
 
+## Linear (CUT- tickets)
+
+- **Never create milestone tickets before proving none exist.** Search with
+  `list_issues(team="CuteBot", query="M6")` and **no `state` filter** — new tickets
+  land in **Backlog**, so a `state: "Todo"` filter returns empty and has already
+  caused a duplicate ticket set (M6, 2026-07-08).
+- The active milestone plan (`M<N>_PLAN.md` at repo root) lists its ticket IDs in the
+  header — those are canonical; implement against them.
+- When creating tickets, set `state: "Todo"` explicitly so default-state mismatches
+  can't hide them.
+
 ## Cognitive Workflow (RPER)
 
 Defined in global `~/.claude/CLAUDE.md` — applies here. Every non-trivial task:
