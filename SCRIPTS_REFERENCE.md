@@ -65,6 +65,21 @@ python -m app.notifier.telegram set-webhook
 python -m app.notifier.telegram delete-webhook
 ```
 
+### Bot commands (owner-gated; work in dev and prod — M6)
+
+```
+/status          counts by status, queue depth, last 5 published
+/generate [N]    generate N suggestions now (default BATCH_SIZE) + DM for review
+/postnow [id]    publish front-of-queue, or a specific APPROVED post by id
+/queue           approved posts in queue order
+/pending         re-DM undecided suggestions (lost-DM recovery)
+/requeue <id>    move a FAILED post back into the queue
+(photo DM)       save the photo into the stock library
+```
+
+Rejecting a post (❌) offers one-tap reason chips (voice/hebrew/image/boring/skip) —
+stored on `Feedback.reason`, the future learning-loop signal.
+
 ## Model eval (Hebrew quality bake-off)
 
 ```bash
@@ -118,8 +133,9 @@ pytest -m live        # live integration tests (requires ANTHROPIC_API_KEY in en
    STOCK_IMAGES_DIR=/data/stock
    BRAND_FILE=/data/brand.md
    # Schedule (change + redeploy to adjust):
-   GENERATION_CRON=0 9 * * *   # when to generate suggestions (UTC cron)
-   POSTING_SLOTS=12:00,18:00   # when to publish approved posts (HH:MM UTC, comma-separated)
+   GENERATION_CRON=0 9 * * *   # when to generate suggestions (cron, in SCHEDULE_TZ)
+   POSTING_SLOTS=12:00,18:00   # when to publish approved posts (HH:MM in SCHEDULE_TZ)
+   SCHEDULE_TZ=Asia/Jerusalem  # IANA timezone for both (default; DST-safe)
    ```
 
 4. Set healthcheck path to `/health` in Railway service settings.

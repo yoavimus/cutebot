@@ -68,10 +68,12 @@ inventory.
 
 ✅ **v1 shipped and running in production** (Railway). The full
 generate → review → queue → publish loop runs autonomously: image-first vision
-captioning (Hebrew + English), Telegram review with reversible Approve/Reject,
-`/status` command, and scheduled publishing. Publishers are still **logging stubs** —
-the first real network integration (Instagram) is the next major milestone. See
-`ROADMAP.md` for sequencing and `PRODUCT_SPEC.md` for scope.
+captioning (Hebrew + English), Telegram review with reversible Approve/Reject and
+one-tap reject reasons, a full operator console over Telegram commands
+(`/generate`, `/postnow`, `/queue`, `/pending`, `/requeue`, `/status`, photo upload
+→ stock), and timezone-aware scheduled publishing. Publishers are still **logging
+stubs** — the first real network integration (Instagram) is the next major
+milestone. See `ROADMAP.md` for sequencing and `PRODUCT_SPEC.md` for scope.
 
 ## License
 

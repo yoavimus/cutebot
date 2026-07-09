@@ -131,6 +131,25 @@ correct state transitions; a crash mid-publish self-heals, never double-posts.
 
 **DoD:** pipeline is pleasant to operate — status visible in one curl (dev) or Telegram `/status` (prod), decisions reversible, images random, brand file editable by non-technical owners.
 
+## M6 — Operator console & feedback signal
+
+> Shipped ✅ 2026-07-09 — implemented as tickets CUT-50…54 (+ CUT-47 catch-up follow-up);
+> plan archived at **`docs/archive/M6_PLAN.md`**. Deployed & dry-run verified in prod.
+
+- [x] **Telegram operator console** — `/generate [N]`, `/postnow [id]` (front-of-queue
+      or a specific **approved** post; gate untouched), `/queue`, `/requeue <id>`,
+      `/pending` (re-DMs undecided posts — lost-DM recovery), `/status`, and photo
+      upload → stock library. All owner-gated.
+- [x] **Reject reasons** — two-step ❌ flow with chips (voice / hebrew / image / boring
+      + skip); `Feedback.reason` column (migration 0003) — the training signal M8 needs.
+- [x] **Timezone-aware schedule** — `SCHEDULE_TZ` (default `Asia/Jerusalem`), DST-safe.
+- [x] **Reliability** — posting-slot `misfire_grace_time` + startup catch-up
+      (`CATCHUP_WINDOW_MIN`) so a deploy straddling a slot can't skip it; review-DM
+      send failures logged.
+
+**DoD:** every pipeline operation reachable from Telegram; rejections carry reasons;
+slots run in Israel time and survive restarts — **verified via prod dry run.**
+
 ---
 
 ## Post-v1 (decided 2026-07-08 — see `docs/POST_V1_REVIEW.md` for the reasoning)
@@ -140,21 +159,15 @@ native Hebrew review by the owner. Round 1: Claude Sonnet / Claude Opus / same-t
 GPT (pending Anthropic credits); round 2 adds Gemini. Resolves the DEV_GUIDELINES
 "Model decision" open item.
 
-1. **M6 — operator console & feedback signal** (small–medium): full Telegram command
-   set (`/generate [N]`, `/postnow [id]`, `/queue`, `/requeue <id>`, `/pending`,
-   photo-upload-to-stock), one-tap **reject reasons** (voice / Hebrew / image / boring
-   + skip; new `Feedback.reason` column), timezone-aware posting slots
-   (`SCHEDULE_TZ`, default `Asia/Jerusalem`), posting-slot misfire catch-up, and
-   review-DM send-failure logging. Plan: **`M6_PLAN.md`**.
-2. **M7 — first real publisher: Instagram** (spec E; medium–large): Instagram Graph
+1. **M7 — first real publisher: Instagram** (spec E; medium–large): Instagram Graph
    API with OAuth + media upload; carousel/multi-image design decided here (schema:
-   post-images table). **Meta business-verification / app-review paperwork starts
-   during M6** — weeks of external lead time.
-3. **M8 — learning loop v1** (spec A; medium): few-shot from accumulated approvals +
+   post-images table). **Meta business-verification / app-review paperwork should start
+   now** — weeks of external lead time.
+2. **M8 — learning loop v1** (spec A; medium): few-shot from accumulated approvals +
    reject-reason conditioning; recent-post memory ("don't repeat these"); measured
    with the eval harness. **Brand distillation** (strong model proposes `brand.md`
    diffs from feedback, owner approves in Telegram) lands here or M9.
-4. **Later, relative order unchanged:** C — approve-with-edits → D — more review
+3. **Later, relative order unchanged:** C — approve-with-edits → D — more review
    channels (re-aimed at **WhatsApp Business** for the Israeli market, not
    Discord/Slack) → F — analytics feedback → G — multi-tenant → B — image generation
    (*deferred for the foreseeable future*).
