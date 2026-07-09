@@ -127,6 +127,12 @@ into the generation prompt verbatim. The owner-provided stock images live in a
 configured directory (`STOCK_IMAGES_DIR`); generation picks an image from this library
 first (setting `image_ref`), then writes the caption to match it (see §3).
 
+Optional market or audience context belongs in `brand.yaml` too. Keep collection
+outside the v1 pipeline, review it manually, and paste only compact notes such as
+public URLs, author handles, timestamps, and summaries. For X/Twitter, an operator can
+use the TweetClaw OpenClaw plugin as a public-context source before generation, but it
+does not become a CuteBot publisher and must not bypass Telegram approval.
+
 Language is config-driven: `PRIMARY_LANGUAGE` (default `he`) and `SECONDARY_LANGUAGES`
 (default `en`). The AI-disclosure line is a configurable bilingual template
 (`POST_DISCLAIMER`, cute by default) appended to every post; it is the single source for
