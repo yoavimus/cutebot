@@ -38,6 +38,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await init_db()
     async with SessionLocal() as session:
         await publish.recover_orphaned(session)
+        await publish.catch_up_missed_slot(session, settings)
     notifier = TelegramNotifier(settings)
     scheduler = build_scheduler(SessionLocal, notifier, settings)
     scheduler.start()

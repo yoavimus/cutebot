@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     generation_cron: str = "0 9 * * *"
     posting_slots: str = "12:00,18:00"
     schedule_tz: str = "Asia/Jerusalem"
+    # Startup catch-up: publish once if a posting slot fell in this window while the
+    # process was down (deploys straddling a slot would otherwise skip it silently).
+    catchup_window_min: int = 60
     brand_file: str = "brand.md"
 
     # Image-first generation (stock library + bilingual captioning)

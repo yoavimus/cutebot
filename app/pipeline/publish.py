@@ -8,11 +8,13 @@ call, so a crash/retry can't double-post.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import Settings
 from app.models import Post, PostStatus
 from app.pipeline import queue
 from app.publishers.base import Publisher, PublishResult, get_publishers
@@ -78,6 +80,46 @@ async def publish_next(
         logger.info("Posting slot fired but the queue is empty — nothing to publish.")
         return None
     return await _do_publish(session, post, publishers)
+
+
+async def catch_up_missed_slot(
+    session: AsyncSession,
+    settings: Settings,
+    *,
+    now: datetime | None = None,
+    publishers: list[Publisher] | None = None,
+) -> Post | None:
+    """Publish once at startup if a posting slot was missed while the process was down.
+
+    misfire_grace_time only covers delays while the scheduler is alive; the in-memory
+    jobstore can't backfill runs missed across a restart/redeploy. So: if the most
+    recent slot fired within ``CATCHUP_WINDOW_MIN`` and nothing was published since,
+    drain one post now. ponytail: startup check, not a persistent jobstore.
+    """
+    slots = settings.posting_slots_list
+    if not slots:
+        return None
+    tz = ZoneInfo(settings.schedule_tz)
+    now = (now or datetime.now(tz)).astimezone(tz)
+    slot_times = []
+    for hh, mm in slots:
+        slot = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if slot > now:
+            slot -= timedelta(days=1)
+        slot_times.append(slot)
+    last_slot = max(slot_times)
+    if now - last_slot > timedelta(minutes=settings.catchup_window_min):
+        return None
+
+    last_published = await session.scalar(select(func.max(Post.published_at)))
+    if last_published is not None:
+        if last_published.tzinfo is None:  # SQLite returns naive datetimes; stored as UTC
+            last_published = last_published.replace(tzinfo=UTC)
+        if last_published >= last_slot:
+            return None
+
+    logger.info("Posting slot at %s was missed (restart?) — catching up.", last_slot)
+    return await publish_next(session, publishers)
 
 
 async def publish_by_id(

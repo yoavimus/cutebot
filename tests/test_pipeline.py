@@ -5,6 +5,7 @@ The LLM, stock library, and publishers are stubbed; no network or real files tou
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -291,3 +292,47 @@ async def test_full_state_transition_arc(session: AsyncSession) -> None:
     result = await publish.publish_next(session, [_OkPublisher()])
     assert result is not None and result.status == PostStatus.PUBLISHED
     assert result.published_at is not None
+
+
+# ───────────────────────────── startup slot catch-up ─────────────────────────
+
+
+def _catchup_settings() -> Settings:
+    return Settings(
+        posting_slots="12:00,18:00", schedule_tz="UTC", catchup_window_min=60
+    )
+
+
+async def test_catch_up_publishes_when_slot_missed(session: AsyncSession) -> None:
+    posts = await generate.generate_batch(session, n=1, brand="b")
+    await review.handle_decision(session, posts[0].id, Decision.APPROVE)
+
+    # Fixed past date: 30 min after the 12:00 slot, inside the 60-min window.
+    now = datetime(2026, 1, 5, 12, 30, tzinfo=UTC)
+    result = await publish.catch_up_missed_slot(
+        session, _catchup_settings(), now=now, publishers=[_OkPublisher()]
+    )
+    assert result is not None and result.status == PostStatus.PUBLISHED
+
+    # Second startup with something already published since the slot → no double-post.
+    again = await publish.catch_up_missed_slot(
+        session, _catchup_settings(), now=now, publishers=[_OkPublisher()]
+    )
+    assert again is None
+
+
+async def test_catch_up_skips_outside_window(session: AsyncSession) -> None:
+    posts = await generate.generate_batch(session, n=1, brand="b")
+    await review.handle_decision(session, posts[0].id, Decision.APPROVE)
+
+    now = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)  # 2.5h after the 12:00 slot
+    result = await publish.catch_up_missed_slot(
+        session, _catchup_settings(), now=now, publishers=[_OkPublisher()]
+    )
+    assert result is None
+    assert await queue.queue_length(session) == 1  # untouched
+
+
+async def test_catch_up_noop_without_slots(session: AsyncSession) -> None:
+    settings = Settings(posting_slots="", schedule_tz="UTC")
+    assert await publish.catch_up_missed_slot(session, settings) is None
