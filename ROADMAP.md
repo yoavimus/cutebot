@@ -159,10 +159,13 @@ native Hebrew review by the owner. Round 1: Claude Sonnet / Claude Opus / same-t
 GPT (pending Anthropic credits); round 2 adds Gemini. Resolves the DEV_GUIDELINES
 "Model decision" open item.
 
-1. **M7 — first real publisher: Instagram** (spec E; medium–large): Instagram Graph
-   API with OAuth + media upload; carousel/multi-image design decided here (schema:
-   post-images table). **Meta business-verification / app-review paperwork should start
-   now** — weeks of external lead time.
+1. **M7 — first real publisher: Instagram** (spec E; medium; plan: `M7_PLAN.md`):
+   real Instagram Graph adapter behind the existing `Publisher` seam — **single-image
+   feed posts** (two-step container→publish, image served from the app at `/media/...`,
+   crash-safe idempotency so recovery can't double-post). Carousel/multi-image is
+   **deferred to the backlog** (needs a `post-images` table + generation/review rework).
+   **Meta business-verification / app-review paperwork should start now** — weeks of
+   external lead time.
 2. **M8 — learning loop v1** (spec A; medium): few-shot from accumulated approvals +
    reject-reason conditioning; recent-post memory ("don't repeat these"); measured
    with the eval harness. **Brand distillation** (strong model proposes `brand.md`
@@ -176,4 +179,6 @@ GPT (pending Anthropic credits); round 2 adds Gemini. Resolves the DEV_GUIDELINE
 
 > Ideas land here (not in PRODUCT_SPEC); milestones graduate out of it.
 
-- *(empty — the 2026-07-08 review triaged everything into the sequence above)*
+- **Instagram carousel / multi-image posts** — deferred out of M7 (2026-07-14). Needs a
+  `post-images` table and generation + review-DM rework to carry multiple images per post;
+  M7 ships single-image feed posts. Graduate into a milestone when multi-image demand is real.
