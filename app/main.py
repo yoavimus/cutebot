@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import io
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import Response
+from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import render
 from app.config import Settings, get_settings
 from app.db import SessionLocal, get_session, init_db
 from app.models import Post, PostStatus
@@ -36,10 +40,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     check_prod_config(settings)
     if settings.is_dev:
         await init_db()
-    async with SessionLocal() as session:
-        await publish.recover_orphaned(session)
-        await publish.catch_up_missed_slot(session, settings)
     notifier = TelegramNotifier(settings)
+    async with SessionLocal() as session:
+        await publish.recover_orphaned(session, notifier, settings)
+        await publish.catch_up_missed_slot(session, settings)
     scheduler = build_scheduler(SessionLocal, notifier, settings)
     scheduler.start()
     app.state.notifier = notifier
@@ -59,6 +63,18 @@ app = FastAPI(title="CuteBot", version="0.1.0", lifespan=lifespan)
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/media/{image_ref:path}")
+async def get_media(image_ref: str) -> Response:
+    """Serve a stock image as JPEG — the public URL Instagram Graph fetches (M7.2)."""
+    path = render.resolve_media_path(image_ref, get_settings())
+    if path is None:
+        raise HTTPException(status_code=404, detail="not found")
+    with Image.open(path) as img:
+        buf = io.BytesIO()
+        img.convert("RGB").save(buf, format="JPEG")
+    return Response(content=buf.getvalue(), media_type="image/jpeg")
 
 
 @app.post("/telegram/webhook")

@@ -27,3 +27,16 @@ def render_full_caption(post: Post, settings: Settings) -> str:
 def image_path(post: Post, settings: Settings) -> Path:
     """Resolve the post's ``image_ref`` against the configured stock directory."""
     return Path(settings.stock_images_dir) / post.image_ref
+
+
+def resolve_media_path(image_ref: str, settings: Settings) -> Path | None:
+    """Resolve ``image_ref`` under the stock directory for ``GET /media/{ref}``.
+
+    Returns None if the ref escapes the stock directory (path traversal) or doesn't
+    exist — callers should 404 either case without distinguishing them.
+    """
+    base = Path(settings.stock_images_dir).resolve()
+    candidate = (base / image_ref).resolve()
+    if not candidate.is_relative_to(base) or not candidate.is_file():
+        return None
+    return candidate

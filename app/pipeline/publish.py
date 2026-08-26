@@ -16,14 +16,56 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.models import Post, PostStatus
+from app.notifier.base import Notifier
 from app.pipeline import queue
 from app.publishers.base import Publisher, PublishResult, get_publishers
 
 logger = logging.getLogger(__name__)
 
 
-async def recover_orphaned(session: AsyncSession) -> int:
-    """Reset any PUBLISHING posts to APPROVED (startup crash recovery).
+async def _recover_one(
+    session: AsyncSession, notifier: Notifier, settings: Settings, post: Post
+) -> None:
+    """Resolve one orphaned PUBLISHING post without risking a double-post to Instagram.
+
+    Stubs are idempotent; Instagram is not — a crash after ``media_publish`` succeeds
+    but before we commit PUBLISHED must never be reset to APPROVED (that would
+    re-post). See M7_PLAN.md § M7.3.
+    """
+    if post.ig_media_id:
+        post.status = PostStatus.PUBLISHED  # it did publish; never re-post
+        return
+    if post.ig_container_id:
+        from app.publishers.instagram import get_container_status
+
+        try:
+            status = await get_container_status(post.ig_container_id, settings)
+        except Exception:
+            logger.exception(
+                "Recovery: could not query IG container %s for post %s.",
+                post.ig_container_id,
+                post.id,
+            )
+            status = "UNKNOWN"
+        if status == "PUBLISHED":
+            post.status = PostStatus.PUBLISHED
+        elif status in {"FINISHED", "IN_PROGRESS", "UNKNOWN"}:
+            # Ambiguous whether media_publish fired — do not auto-republish.
+            post.status = PostStatus.FAILED
+            await notifier.send_message(
+                f"⚠️ Post #{post.id} publish status unclear after a restart "
+                f"(Instagram container status: {status}). Check the account before "
+                "requeueing."
+            )
+        else:  # ERROR / EXPIRED — nothing was published, safe to retry
+            post.status = PostStatus.APPROVED
+            post.ig_container_id = None
+        return
+    post.status = PostStatus.APPROVED  # Graph was never called; safe to reset
+
+
+async def recover_orphaned(session: AsyncSession, notifier: Notifier, settings: Settings) -> int:
+    """Resolve any PUBLISHING posts left over from a crash/restart.
 
     ponytail: startup sweep; add per-post leases only if v1 ever goes multi-worker.
     """
@@ -31,7 +73,7 @@ async def recover_orphaned(session: AsyncSession) -> int:
         await session.scalars(select(Post).where(Post.status == PostStatus.PUBLISHING))
     ).all()
     for post in posts:
-        post.status = PostStatus.APPROVED
+        await _recover_one(session, notifier, settings, post)
     if posts:
         await session.commit()
         logger.info("Recovered %d orphaned publishing post(s).", len(posts))
@@ -52,7 +94,7 @@ async def _do_publish(
     results = []
     for publisher in targets:
         try:
-            results.append(await publisher.publish(post))
+            results.append(await publisher.publish(session, post))
         except Exception as exc:  # noqa: BLE001 — record per-network failure, keep going
             logger.exception("Publisher %s failed for post %s.", publisher.name, post.id)
             results.append(PublishResult(network=publisher.name, ok=False, detail=str(exc)))

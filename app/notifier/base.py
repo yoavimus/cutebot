@@ -19,3 +19,7 @@ class Notifier(Protocol):
     async def send_suggestion(self, post: Post) -> None:
         """Deliver one suggestion with Approve/Reject controls."""
         ...
+
+    async def send_message(self, text: str) -> None:
+        """Send a plain text message to the owner (status updates, alerts)."""
+        ...

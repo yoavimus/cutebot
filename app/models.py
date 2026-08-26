@@ -64,6 +64,12 @@ class Post(Base):
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
+    # Instagram Graph progress markers — crash-safe idempotency for recover_orphaned
+    # (M7.3). Generic enough for a future real network; IG-specific names are fine
+    # until a second real adapter exists (YAGNI on a shared external_ids table).
+    ig_container_id: Mapped[str | None] = mapped_column(String(64), default=None)
+    ig_media_id: Mapped[str | None] = mapped_column(String(64), default=None)
+
     batch_id: Mapped[int | None] = mapped_column(ForeignKey("batches.id"), default=None)
     batch: Mapped[Batch | None] = relationship(back_populates="posts")
 

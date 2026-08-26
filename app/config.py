@@ -53,8 +53,14 @@ class Settings(BaseSettings):
     secondary_languages: str = "en"
     post_disclaimer: str = "🤖 מאת CuteBot · by CuteBot"
 
-    # Publishers (stubs in v1)
+    # Publishers (Instagram real in M7 when configured; TikTok/X stay stubs)
     instagram_access_token: str = ""
+    instagram_ig_user_id: str = ""
+    instagram_graph_version: str = "v21.0"
+    # Origin CuteBot serves GET /media/... from (Graph fetches the image over HTTPS).
+    # Usually the same Railway URL as telegram_webhook_base, kept distinct in case
+    # media hosting and the Telegram webhook ever diverge.
+    public_base_url: str = ""
     tiktok_access_token: str = ""
     x_api_key: str = ""
     x_api_secret: str = ""

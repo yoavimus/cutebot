@@ -11,6 +11,8 @@ import logging
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.config import get_settings
 from app.models import Post
 from app.render import render_full_caption
@@ -31,7 +33,7 @@ class Publisher(Protocol):
 
     name: str
 
-    async def publish(self, post: Post) -> PublishResult:
+    async def publish(self, session: AsyncSession, post: Post) -> PublishResult:
         ...
 
 
@@ -40,7 +42,7 @@ class _LoggingStubPublisher:
 
     name = "stub"
 
-    async def publish(self, post: Post) -> PublishResult:
+    async def publish(self, session: AsyncSession, post: Post) -> PublishResult:
         caption = render_full_caption(post, get_settings())
         logger.info(
             "[%s] would publish post #%s (image=%s): %s",
@@ -65,5 +67,18 @@ class XPublisher(_LoggingStubPublisher):
 
 
 def get_publishers() -> list[Publisher]:
-    """The active publisher set. v1: stubs for Instagram, TikTok, and X."""
-    return [InstagramPublisher(), TikTokPublisher(), XPublisher()]
+    """The active publisher set.
+
+    Instagram is real once ``instagram_access_token`` and ``instagram_ig_user_id`` are
+    both set (M7); TikTok and X stay logging stubs. Falls back to the Instagram stub
+    without creds so dev/test still exercises the full loop.
+    """
+    settings = get_settings()
+    instagram: Publisher
+    if settings.instagram_access_token and settings.instagram_ig_user_id:
+        from app.publishers.instagram import InstagramPublisher as RealInstagramPublisher
+
+        instagram = RealInstagramPublisher()
+    else:
+        instagram = InstagramPublisher()
+    return [instagram, TikTokPublisher(), XPublisher()]

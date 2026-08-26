@@ -25,22 +25,26 @@ from app.schemas import PostSuggestion
 class _RecordingNotifier:
     def __init__(self) -> None:
         self.sent: list[int] = []
+        self.messages: list[str] = []
 
     async def send_suggestion(self, post: Post) -> None:
         self.sent.append(post.id)
+
+    async def send_message(self, text: str) -> None:
+        self.messages.append(text)
 
 
 class _OkPublisher:
     name = "test"
 
-    async def publish(self, post: Post) -> PublishResult:
+    async def publish(self, session: AsyncSession, post: Post) -> PublishResult:
         return PublishResult(network=self.name, ok=True)
 
 
 class _FailPublisher:
     name = "broken"
 
-    async def publish(self, post: Post) -> PublishResult:
+    async def publish(self, session: AsyncSession, post: Post) -> PublishResult:
         return PublishResult(network=self.name, ok=False, detail="boom")
 
 
@@ -249,12 +253,14 @@ async def test_recover_orphaned(session: AsyncSession) -> None:
     await review.handle_decision(session, posts[0].id, Decision.APPROVE)
     await session.refresh(posts[0])
     original_pos = posts[0].queue_position
-    # Simulate crash: post stuck in PUBLISHING
+    # Simulate crash: post stuck in PUBLISHING, no real-network markers (stub era)
     posts[0].status = PostStatus.PUBLISHING
     await session.commit()
     # Sweep: should reset to APPROVED with queue_position intact
-    n = await publish.recover_orphaned(session)
+    notifier = _RecordingNotifier()
+    n = await publish.recover_orphaned(session, notifier, get_settings())
     assert n == 1
+    assert notifier.messages == []
     await session.refresh(posts[0])
     assert posts[0].status == PostStatus.APPROVED
     assert posts[0].queue_position == original_pos
@@ -262,6 +268,74 @@ async def test_recover_orphaned(session: AsyncSession) -> None:
     result = await publish.publish_next(session, [_OkPublisher()])
     assert result is not None and result.id == posts[0].id
     assert result.status == PostStatus.PUBLISHED
+
+
+async def test_recover_orphaned_with_ig_media_id_marks_published(session: AsyncSession) -> None:
+    """A crash after media_publish committed ig_media_id must never re-post."""
+    posts = await generate.generate_batch(session, n=1, brand="b")
+    await review.handle_decision(session, posts[0].id, Decision.APPROVE)
+    posts[0].status = PostStatus.PUBLISHING
+    posts[0].ig_media_id = "already-live"
+    await session.commit()
+
+    notifier = _RecordingNotifier()
+    n = await publish.recover_orphaned(session, notifier, get_settings())
+    assert n == 1
+    await session.refresh(posts[0])
+    assert posts[0].status == PostStatus.PUBLISHED
+    assert notifier.messages == []
+
+
+async def test_recover_orphaned_ambiguous_container_fails_and_notifies(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Container created but media_publish status unclear — must not auto-republish."""
+    from app.publishers import instagram
+
+    posts = await generate.generate_batch(session, n=1, brand="b")
+    await review.handle_decision(session, posts[0].id, Decision.APPROVE)
+    posts[0].status = PostStatus.PUBLISHING
+    posts[0].ig_container_id = "container-x"
+    await session.commit()
+
+    async def fake_status(container_id: str, settings: Settings) -> str:
+        assert container_id == "container-x"
+        return "FINISHED"
+
+    monkeypatch.setattr(instagram, "get_container_status", fake_status)
+
+    notifier = _RecordingNotifier()
+    n = await publish.recover_orphaned(session, notifier, get_settings())
+    assert n == 1
+    await session.refresh(posts[0])
+    assert posts[0].status == PostStatus.FAILED
+    assert len(notifier.messages) == 1
+
+
+async def test_recover_orphaned_error_container_resets_to_approved(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Container ended ERROR/EXPIRED — nothing published, safe to retry."""
+    from app.publishers import instagram
+
+    posts = await generate.generate_batch(session, n=1, brand="b")
+    await review.handle_decision(session, posts[0].id, Decision.APPROVE)
+    posts[0].status = PostStatus.PUBLISHING
+    posts[0].ig_container_id = "container-y"
+    await session.commit()
+
+    async def fake_status(container_id: str, settings: Settings) -> str:
+        return "ERROR"
+
+    monkeypatch.setattr(instagram, "get_container_status", fake_status)
+
+    notifier = _RecordingNotifier()
+    n = await publish.recover_orphaned(session, notifier, get_settings())
+    assert n == 1
+    await session.refresh(posts[0])
+    assert posts[0].status == PostStatus.APPROVED
+    assert posts[0].ig_container_id is None
+    assert notifier.messages == []
 
 
 async def test_failed_post_requeue(session: AsyncSession) -> None:

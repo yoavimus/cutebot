@@ -54,6 +54,14 @@ curl -s -X POST http://127.0.0.1:8002/dev/run-cycle | jq
 curl -s -X POST http://127.0.0.1:8002/dev/requeue/42 | jq
 ```
 
+## Public media route (M7 — Instagram Graph fetches images here)
+
+```bash
+# Not dev-gated — Graph is an anonymous fetcher. Always returns JPEG (Pillow
+# conversion), 404s outside stock_images_dir.
+curl -s -o out.jpg -w '%{http_code} %{content_type}\n' http://127.0.0.1:8002/media/<image_ref>
+```
+
 ## Telegram review channel
 
 ```bash
@@ -136,6 +144,10 @@ pytest -m live        # live integration tests (requires ANTHROPIC_API_KEY in en
    GENERATION_CRON=0 9 * * *   # when to generate suggestions (cron, in SCHEDULE_TZ)
    POSTING_SLOTS=12:00,18:00   # when to publish approved posts (HH:MM in SCHEDULE_TZ)
    SCHEDULE_TZ=Asia/Jerusalem  # IANA timezone for both (default; DST-safe)
+   # Instagram (M7) — leave unset to keep the logging stub active:
+   INSTAGRAM_ACCESS_TOKEN=<long-lived token — see docs/M7_INSTAGRAM_RUNBOOK.md>
+   INSTAGRAM_IG_USER_ID=<IG Business account id>
+   PUBLIC_BASE_URL=https://<your-service>.up.railway.app   # usually = TELEGRAM_WEBHOOK_BASE
    ```
 
 4. Set healthcheck path to `/health` in Railway service settings.

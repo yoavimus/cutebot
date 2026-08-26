@@ -150,6 +150,41 @@ correct state transitions; a crash mid-publish self-heals, never double-posts.
 **DoD:** every pipeline operation reachable from Telegram; rejections carry reasons;
 slots run in Israel time and survive restarts — **verified via prod dry run.**
 
+## M7 — First real publisher: Instagram
+
+> Code shipped 2026-07-14 — tickets CUT-56…60; plan: `M7_PLAN.md`. **Activation is
+> blocked on CUT-61 (Meta business verification / App Review)** — an external,
+> weeks-long human process, not code. Until creds land, `get_publishers()` falls back
+> to the Instagram stub automatically, so the pipeline keeps running unaffected.
+
+- [x] **M7.1** — real Instagram Graph adapter (`app/publishers/instagram.py`):
+      container create → poll `status_code` → `media_publish`; image-spec validation
+      (JPEG-served, 320–1440px, 4:5–1.91:1 aspect, ≤8MB) before any Graph call.
+- [x] **M7.2** — `GET /media/{image_ref:path}` (not dev-gated) serves stock images as
+      JPEG via Pillow, resolved path-traversal-safe under `stock_images_dir`.
+- [x] **M7.3 (load-bearing)** — migration `0004` adds `Post.ig_container_id` /
+      `ig_media_id`; `Publisher.publish` gains a `session` param so the adapter can
+      commit progress markers mid-flight; `recover_orphaned` is network-aware — a
+      confirmed `ig_media_id` is never reset to APPROVED (would double-post), an
+      ambiguous container status goes to FAILED + a Telegram alert instead of
+      auto-republishing.
+- [x] **M7.4** — config: `INSTAGRAM_IG_USER_ID`, `INSTAGRAM_GRAPH_VERSION`,
+      `PUBLIC_BASE_URL`; real adapter activates only when both the token and IG user
+      id are set, else the stub runs (dev/test unaffected).
+- [x] **M7.5** — offline Graph-mock tests (happy path, error mapping, out-of-spec
+      image, container-resume idempotency) + the crash-recovery tests proving a
+      restart after `media_publish` never re-publishes.
+- [ ] **M7.6** — Meta app + Instagram Graph product, Business Verification, App
+      Review (`instagram_basic`, `instagram_content_publish`, `pages_show_list`,
+      `pages_read_engagement`), long-lived token, prod smoke against a test IG
+      account. **Owner action required** — see CUT-61.
+
+Carousel/multi-image stays **deferred to the backlog** (needs a `post-images` table +
+generation/review rework).
+
+**DoD:** code path proven end-to-end offline; real posting is one owner-side
+credentials step away once Meta approves the app.
+
 ---
 
 ## Post-v1 (decided 2026-07-08 — see `docs/POST_V1_REVIEW.md` for the reasoning)
@@ -159,18 +194,11 @@ native Hebrew review by the owner. Round 1: Claude Sonnet / Claude Opus / same-t
 GPT (pending Anthropic credits); round 2 adds Gemini. Resolves the DEV_GUIDELINES
 "Model decision" open item.
 
-1. **M7 — first real publisher: Instagram** (spec E; medium; plan: `M7_PLAN.md`):
-   real Instagram Graph adapter behind the existing `Publisher` seam — **single-image
-   feed posts** (two-step container→publish, image served from the app at `/media/...`,
-   crash-safe idempotency so recovery can't double-post). Carousel/multi-image is
-   **deferred to the backlog** (needs a `post-images` table + generation/review rework).
-   **Meta business-verification / app-review paperwork should start now** — weeks of
-   external lead time.
-2. **M8 — learning loop v1** (spec A; medium): few-shot from accumulated approvals +
+1. **M8 — learning loop v1** (spec A; medium): few-shot from accumulated approvals +
    reject-reason conditioning; recent-post memory ("don't repeat these"); measured
    with the eval harness. **Brand distillation** (strong model proposes `brand.md`
    diffs from feedback, owner approves in Telegram) lands here or M9.
-3. **Later, relative order unchanged:** C — approve-with-edits → D — more review
+2. **Later, relative order unchanged:** C — approve-with-edits → D — more review
    channels (re-aimed at **WhatsApp Business** for the Israeli market, not
    Discord/Slack) → F — analytics feedback → G — multi-tenant → B — image generation
    (*deferred for the foreseeable future*).
