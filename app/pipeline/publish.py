@@ -105,7 +105,8 @@ async def _do_publish(
         post.queue_position = None
     else:
         post.status = PostStatus.FAILED
-        logger.error("Post %s failed to publish to one or more networks.", post.id)
+        failures = "; ".join(f"{r.network}: {r.detail}" for r in results if not r.ok)
+        logger.error("Post %s failed to publish — %s", post.id, failures or "no publishers ran")
 
     await session.commit()
     await session.refresh(post)
