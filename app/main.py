@@ -72,11 +72,8 @@ async def get_media(image_ref: str) -> Response:
     if path is None:
         raise HTTPException(status_code=404, detail="not found")
     with Image.open(path) as img:
-        # Downscale to IG's 1440px feed max (thumbnail only shrinks, preserves aspect),
-        # so oversized stock never trips Graph's limits. Bytes stay well under 8MB.
-        img.thumbnail((1440, 10_000))
         buf = io.BytesIO()
-        img.convert("RGB").save(buf, format="JPEG")
+        render.prepare_ig_image(img).save(buf, format="JPEG")
     return Response(content=buf.getvalue(), media_type="image/jpeg")
 
 

@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import Settings, get_settings
 from app.models import Post
 from app.publishers.base import PublishResult
-from app.render import image_path, render_full_caption
+from app.render import image_path, prepare_ig_image, render_full_caption
 
 logger = logging.getLogger(__name__)
 
@@ -37,10 +37,9 @@ _POLL_TRIES = 10
 _POLL_DELAY_S = 3
 _DONE_STATUSES = {"FINISHED", "ERROR", "EXPIRED", "PUBLISHED"}
 
-# IG feed image spec: https://developers.facebook.com/docs/instagram-platform/content-publishing
-# Width max (1440px) and the 8MB byte cap are enforced by the GET /media resize, not here.
+# IG feed image spec: width/aspect/bytes are enforced by render.prepare_ig_image (served
+# via GET /media); only the 320px floor is checked here, on the fitted result.
 _MIN_WIDTH = 320
-_MIN_ASPECT, _MAX_ASPECT = 4 / 5, 1.91
 
 
 async def _graph_post(path: str, data: dict[str, Any], settings: Settings) -> dict[str, Any]:
@@ -67,25 +66,19 @@ def _graph_error(body: dict[str, Any]) -> str | None:
 def _validate_image(post: Post, settings: Settings) -> str | None:
     """Check the stock image against IG's feed-image spec. Returns an error, or None.
 
-    ponytail: only rejects what serving can't fix — GET /media downscales to 1440px and
-    re-encodes JPEG, so oversized width and byte size are handled there. What remains:
-    unreadable file, width below IG's 320px floor (we never upscale), and aspect ratio
-    (preserved by the proportional resize, so the source ratio is what Graph sees).
+    ponytail: validates what GET /media will actually serve — ``prepare_ig_image`` pads
+    the aspect and fits the size, so width and aspect can't fail Graph. The only thing
+    left to reject is an image so small it stays under IG's 320px floor after fitting
+    (we never upscale), plus an unreadable file.
     """
     path = image_path(post, settings)
     try:
         with Image.open(path) as img:
-            width, height = img.size
+            width, _ = prepare_ig_image(img).size
     except Exception as exc:  # noqa: BLE001 — surfaced as a failed PublishResult, not a crash
         return f"cannot read image {path}: {exc}"
     if width < _MIN_WIDTH:
-        return f"image width {width}px below Instagram's {_MIN_WIDTH}px minimum"
-    aspect = width / height
-    if not (_MIN_ASPECT - 1e-6 <= aspect <= _MAX_ASPECT + 1e-6):
-        return (
-            f"image aspect ratio {aspect:.3f} out of Instagram's range "
-            f"[{_MIN_ASPECT:.2f}, {_MAX_ASPECT}]"
-        )
+        return f"image width {width}px below Instagram's {_MIN_WIDTH}px minimum (after fitting)"
     return None
 
 
