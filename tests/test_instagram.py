@@ -141,3 +141,17 @@ async def test_publish_resumes_from_existing_container_no_recreate(
 
     assert result.ok is True
     assert post_calls == ["ig-user/media_publish"]  # no container create call
+
+
+def test_publishing_switch_selects_stub_vs_real(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PUBLISHING_ENABLED gates the real adapter even when creds are present."""
+    from app.publishers import base
+    from app.publishers.instagram import InstagramPublisher as RealIG
+
+    creds = dict(instagram_access_token="tok", instagram_ig_user_id="ig-user")
+
+    monkeypatch.setattr(base, "get_settings", lambda: Settings(publishing_enabled=True, **creds))
+    assert isinstance(base.get_publishers()[0], RealIG)  # live → real
+
+    monkeypatch.setattr(base, "get_settings", lambda: Settings(publishing_enabled=False, **creds))
+    assert isinstance(base.get_publishers()[0], base.InstagramPublisher)  # kill-switch → stub

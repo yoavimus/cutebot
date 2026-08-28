@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     post_disclaimer: str = "🤖 מאת CuteBot · by CuteBot"
 
     # Publishers (Instagram real in M7 when configured; TikTok/X stay stubs)
+    # Master kill-switch: set false to keep the full pipeline running but route every
+    # network to the logging stub — approve/queue/publish work, nothing hits Instagram.
+    publishing_enabled: bool = True
     instagram_access_token: str = ""
     instagram_ig_user_id: str = ""
     instagram_graph_version: str = "v21.0"

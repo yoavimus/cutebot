@@ -50,7 +50,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.scheduler = scheduler
     if not settings.is_dev and settings.telegram_webhook_base:
         await _set_webhook()
-    logger.info("CuteBot started (env=%s).", settings.app_env)
+    live = settings.publishing_enabled and bool(
+        settings.instagram_access_token and settings.instagram_ig_user_id
+    )
+    logger.info(
+        "CuteBot started (env=%s) — publishing %s.",
+        settings.app_env,
+        "LIVE (real Instagram)" if live else "DRY-RUN (stub, nothing posted)",
+    )
     try:
         yield
     finally:

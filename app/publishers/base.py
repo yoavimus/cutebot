@@ -70,12 +70,17 @@ def get_publishers() -> list[Publisher]:
     """The active publisher set.
 
     Instagram is real once ``instagram_access_token`` and ``instagram_ig_user_id`` are
-    both set (M7); TikTok and X stay logging stubs. Falls back to the Instagram stub
-    without creds so dev/test still exercises the full loop.
+    both set (M7) AND ``publishing_enabled`` is on; TikTok and X stay logging stubs.
+    Falls back to the Instagram stub without creds — or with ``PUBLISHING_ENABLED=false``
+    — so dev/test (and "playing" in prod) exercises the full loop without posting.
     """
     settings = get_settings()
     instagram: Publisher
-    if settings.instagram_access_token and settings.instagram_ig_user_id:
+    if (
+        settings.publishing_enabled
+        and settings.instagram_access_token
+        and settings.instagram_ig_user_id
+    ):
         from app.publishers.instagram import InstagramPublisher as RealInstagramPublisher
 
         instagram = RealInstagramPublisher()
