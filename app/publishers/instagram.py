@@ -38,9 +38,9 @@ _POLL_DELAY_S = 3
 _DONE_STATUSES = {"FINISHED", "ERROR", "EXPIRED", "PUBLISHED"}
 
 # IG feed image spec: https://developers.facebook.com/docs/instagram-platform/content-publishing
-_MIN_WIDTH, _MAX_WIDTH = 320, 1440
+# Width max (1440px) and the 8MB byte cap are enforced by the GET /media resize, not here.
+_MIN_WIDTH = 320
 _MIN_ASPECT, _MAX_ASPECT = 4 / 5, 1.91
-_MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
 
 async def _graph_post(path: str, data: dict[str, Any], settings: Settings) -> dict[str, Any]:
@@ -67,9 +67,10 @@ def _graph_error(body: dict[str, Any]) -> str | None:
 def _validate_image(post: Post, settings: Settings) -> str | None:
     """Check the stock image against IG's feed-image spec. Returns an error, or None.
 
-    ponytail: validates the source file (dimensions survive JPEG re-encode; the size
-    check is a conservative proxy for the served bytes since /media re-encodes on the
-    fly). Tighten if a source ever slips past this and gets rejected by Graph.
+    ponytail: only rejects what serving can't fix — GET /media downscales to 1440px and
+    re-encodes JPEG, so oversized width and byte size are handled there. What remains:
+    unreadable file, width below IG's 320px floor (we never upscale), and aspect ratio
+    (preserved by the proportional resize, so the source ratio is what Graph sees).
     """
     path = image_path(post, settings)
     try:
@@ -77,17 +78,14 @@ def _validate_image(post: Post, settings: Settings) -> str | None:
             width, height = img.size
     except Exception as exc:  # noqa: BLE001 — surfaced as a failed PublishResult, not a crash
         return f"cannot read image {path}: {exc}"
-    if not (_MIN_WIDTH <= width <= _MAX_WIDTH):
-        return f"image width {width}px out of Instagram's range [{_MIN_WIDTH}, {_MAX_WIDTH}]"
+    if width < _MIN_WIDTH:
+        return f"image width {width}px below Instagram's {_MIN_WIDTH}px minimum"
     aspect = width / height
     if not (_MIN_ASPECT - 1e-6 <= aspect <= _MAX_ASPECT + 1e-6):
         return (
             f"image aspect ratio {aspect:.3f} out of Instagram's range "
             f"[{_MIN_ASPECT:.2f}, {_MAX_ASPECT}]"
         )
-    size = path.stat().st_size
-    if size > _MAX_IMAGE_BYTES:
-        return f"image size {size} bytes exceeds Instagram's {_MAX_IMAGE_BYTES}-byte max"
     return None
 
 
