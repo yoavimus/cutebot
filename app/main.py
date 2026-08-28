@@ -53,7 +53,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     live = settings.publishing_enabled and bool(
         settings.instagram_access_token and settings.instagram_ig_user_id
     )
-    logger.info(
+    # warning-level so the publish mode is always visible in prod logs (root logger is
+    # at WARNING there — app INFO is filtered). ponytail: elevate this one banner rather
+    # than reconfigure global logging.
+    logger.warning(
         "CuteBot started (env=%s) — publishing %s.",
         settings.app_env,
         "LIVE (real Instagram)" if live else "DRY-RUN (stub, nothing posted)",
