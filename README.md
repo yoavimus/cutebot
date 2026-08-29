@@ -26,6 +26,33 @@ future suggestions.
    pulled from the front of the queue and broadcast to every linked network.
    (`app/pipeline/publish.py`, `app/publishers/`)
 
+## Optional X/Twitter context
+
+CuteBot can use public social context without changing its approval model. Keep
+research outside the pipeline, review it yourself, then paste only short notes into
+`brand.yaml` before the next generation run.
+
+If you already use OpenClaw, [TweetClaw](https://github.com/Xquik-dev/tweetclaw)
+is a useful optional source for public X/Twitter searches:
+
+```bash
+openclaw plugins install npm:@xquik/tweetclaw
+openclaw config set plugins.entries.tweetclaw.config.apiKey "$XQUIK_API_KEY"
+openclaw config set tools.alsoAllow '["explore", "tweetclaw"]'
+```
+
+Suggested workflow:
+
+1. Ask OpenClaw to use TweetClaw for recent public posts, replies, or follower
+   context around your brand, audience, or campaign topic.
+2. Save only reviewed URLs, handles, timestamps, and short summaries under a
+   `market_context:` section in `brand.yaml`.
+3. Run CuteBot's normal generation cycle.
+4. Approve or reject every draft in Telegram before anything reaches the queue.
+
+TweetClaw should stay a research input here, not a CuteBot publisher. CuteBot's
+Telegram approval gate and scheduled queue remain the only path to posting.
+
 ## Stack
 
 - **Backend / pipeline**: Python 3.12 · FastAPI · async SQLAlchemy
