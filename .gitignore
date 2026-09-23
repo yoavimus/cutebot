@@ -55,5 +55,5 @@ cutebot_description.txt
 # WSL/Windows download metadata
 *Zone.Identifier
 
-# Model-eval review artifacts (regenerable via scripts.eval_models)
-eval_results*.md
+# Model-eval review artifacts (regenerable via scripts.eval_models / eval_to_html)
+eval_results.*

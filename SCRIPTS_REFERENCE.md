@@ -96,6 +96,10 @@ stored on `Feedback.reason`, the future learning-loop signal.
 python -m scripts.eval_models                          # default candidate list
 python -m scripts.eval_models --models anthropic/claude-sonnet-4-6,openai/gpt-5.1
 python -m scripts.eval_models --images 5 --out eval_results.md
+
+# Render the results as a side-by-side HTML page with the images inline (local, no
+# upload). Open from the repo root so stock/ images resolve.
+python -m scripts.eval_to_html                          # eval_results.md -> eval_results.html
 ```
 
 Review the output natively, then record the decision in `DEV_GUIDELINES.md`
