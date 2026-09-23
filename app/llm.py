@@ -78,6 +78,15 @@ def _has_provider_key(s: Settings) -> bool:
     return True
 
 
+def _unwrap_json_envelope(data: object) -> object:
+    """Some models (seen with Opus under response_format=json_object) wrap the object
+    in a single-key ``{"json": {...}}`` envelope. Unwrap it so validation sees the
+    flat fields; leave anything else untouched."""
+    if isinstance(data, dict) and list(data) == ["json"] and isinstance(data["json"], dict):
+        return data["json"]
+    return data
+
+
 def _stub_suggestion(image_path: Path) -> PostSuggestion:
     return PostSuggestion(
         caption_he=f"[סטאב] קבעו ANTHROPIC_API_KEY כדי לכתוב כיתוב אמיתי ל-{image_path.name}.",
@@ -130,6 +139,7 @@ async def caption_image(brand: str, image_path: Path, settings: Settings) -> Pos
     content = response["choices"][0]["message"]["content"]
     try:
         data = json.loads(content)
+        data = _unwrap_json_envelope(data)
         return PostSuggestion.model_validate(data)
     except (json.JSONDecodeError, ValidationError) as exc:
         logger.error("LLM returned invalid response for %s: %.200s", image_path.name, content)
