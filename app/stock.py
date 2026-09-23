@@ -7,11 +7,12 @@ Generation is image-first: pick an image from here, then caption it (vision).
 from __future__ import annotations
 
 import base64
+import io
 import logging
-import mimetypes
 import random
 from pathlib import Path
 
+from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -65,10 +66,17 @@ async def select_images(session: AsyncSession, n: int, settings: Settings) -> li
     return selected
 
 
-def load_image_b64(path: Path) -> tuple[str, str]:
-    """Return ``(mime_type, base64_str)`` for the vision call."""
-    mime_type, _ = mimetypes.guess_type(path.name)
-    if mime_type is None:
-        mime_type = "application/octet-stream"
-    data = base64.b64encode(path.read_bytes()).decode("ascii")
-    return mime_type, data
+def load_image_b64(path: Path, max_edge: int = 1568) -> tuple[str, str]:
+    """Return ``("image/jpeg", base64_str)`` for the vision call.
+
+    Downscales to ``max_edge`` on the long side and re-encodes JPEG so the base64
+    payload stays well under provider limits — Claude rejects base64 images >10MB, and
+    real stock (4000px phone photos) blows past that. 1568px is Anthropic's recommended
+    vision long-edge; larger just burns tokens without adding detail.
+    """
+    with Image.open(path) as img:
+        img = img.convert("RGB")
+        img.thumbnail((max_edge, max_edge))  # shrinks only, preserves aspect
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+    return "image/jpeg", base64.b64encode(buf.getvalue()).decode("ascii")

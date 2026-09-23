@@ -108,11 +108,19 @@ async def caption_image(brand: str, image_path: Path, settings: Settings) -> Pos
             ],
         },
     ]
+    # GPT-5.x / o-series reject the legacy max_tokens and want max_completion_tokens;
+    # everything else (incl. Claude) uses max_tokens. Keeps the cost cap on every model.
+    model = settings.default_llm_model
+    token_cap = (
+        {"max_completion_tokens": settings.llm_max_tokens}
+        if model.startswith(("openai/gpt-5", "openai/o1", "openai/o3", "openai/o4"))
+        else {"max_tokens": settings.llm_max_tokens}
+    )
     response = await litellm.acompletion(
         model=settings.default_llm_model,
         messages=messages,
         response_format={"type": "json_object"},
-        max_tokens=settings.llm_max_tokens,
+        **token_cap,
         timeout=settings.llm_timeout_s,
         num_retries=settings.llm_num_retries,
         # LiteLLM only reads keys from os.environ; pass explicitly since pydantic-settings
