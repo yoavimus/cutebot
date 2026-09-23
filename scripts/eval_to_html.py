@@ -16,6 +16,8 @@ import html
 import re
 from pathlib import Path
 
+from app.stock import load_image_b64
+
 
 def parse(md: str) -> list[dict]:
     """Parse the rigid eval_results.md structure into image → models records."""
@@ -104,7 +106,17 @@ main{max-width:1200px;margin:0 auto;padding:0 16px 60px}
 """
 
 
-def render(images: list[dict], title: str) -> str:
+def _img_src(img: dict, embed: bool) -> str:
+    """The <img src> value: a self-contained data URI when embedding (downscaled, so the
+    file stays small and sendable), else the relative path as-is."""
+    src = img["src"] or ""
+    if not embed or not src:
+        return html.escape(src)
+    mime, b64 = load_image_b64(Path(src))  # downscales + JPEG-encodes; ~a few hundred KB
+    return f"data:{mime};base64,{b64}"
+
+
+def render(images: list[dict], title: str, embed: bool = False) -> str:
     cards = []
     for img in images:
         cols = []
@@ -119,7 +131,7 @@ def render(images: list[dict], title: str) -> str:
                 + (f'<div class="rat">{html.escape(m["rationale"])}</div>' if m["rationale"] else "")
                 + "</div>"
             )
-        src = html.escape(img["src"] or "")
+        src = _img_src(img, embed)
         cards.append(
             f'<section class="imgcard"><h2>{html.escape(img["name"])}</h2>'
             f'<div class="body"><div class="photo"><img loading="lazy" src="{src}" alt=""></div>'
@@ -140,13 +152,22 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--in", dest="src", default="eval_results.md")
     p.add_argument("--out", default="eval_results.html")
+    p.add_argument(
+        "--embed",
+        action="store_true",
+        help="inline downscaled images as data URIs → one self-contained, sendable file",
+    )
     args = p.parse_args()
     md = Path(args.src).read_text(encoding="utf-8")
     images = parse(md)
     if not images:
         raise SystemExit(f"No image sections parsed from {args.src!r}.")
-    Path(args.out).write_text(render(images, "Model eval — Hebrew quality gate"), encoding="utf-8")
-    print(f"Wrote {args.out} — open it from the repo root so stock/ images resolve.")
+    html_out = render(images, "Model eval — Hebrew quality gate", embed=args.embed)
+    Path(args.out).write_text(html_out, encoding="utf-8")
+    if args.embed:
+        print(f"Wrote {args.out} — self-contained, send it anywhere.")
+    else:
+        print(f"Wrote {args.out} — open it from the repo root so stock/ images resolve.")
 
 
 if __name__ == "__main__":

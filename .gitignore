@@ -57,3 +57,4 @@ cutebot_description.txt
 
 # Model-eval review artifacts (regenerable via scripts.eval_models / eval_to_html)
 eval_results.*
+eval_comparison*.html

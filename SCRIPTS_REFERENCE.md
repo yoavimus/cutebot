@@ -97,9 +97,12 @@ python -m scripts.eval_models                          # default candidate list
 python -m scripts.eval_models --models anthropic/claude-sonnet-4-6,openai/gpt-5.1
 python -m scripts.eval_models --images 5 --out eval_results.md
 
-# Render the results as a side-by-side HTML page with the images inline (local, no
-# upload). Open from the repo root so stock/ images resolve.
+# Render the results as a side-by-side HTML page. Open from the repo root so stock/
+# images resolve (local, no upload).
 python -m scripts.eval_to_html                          # eval_results.md -> eval_results.html
+# --embed inlines downscaled images as data URIs → one self-contained file you can
+# send to anyone (no stock/ folder needed on their end).
+python -m scripts.eval_to_html --embed --out eval_comparison_shareable.html
 ```
 
 Review the output natively, then record the decision in `DEV_GUIDELINES.md`
