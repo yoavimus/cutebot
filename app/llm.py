@@ -78,6 +78,15 @@ def _has_provider_key(s: Settings) -> bool:
     return True
 
 
+def _strip_fences(text: str) -> str:
+    """A fenced code block (```json ... ```) → the inner JSON; anything else passes through."""
+    t = text.strip()
+    if t.startswith("```"):
+        t = t.split("\n", 1)[1] if "\n" in t else ""
+        t = t.rsplit("```", 1)[0]
+    return t.strip()
+
+
 def _unwrap_json_envelope(data: object) -> object:
     """Some models (seen with Opus under response_format=json_object) wrap the object
     in a single-key ``{"json": {...}}`` envelope. Unwrap it so validation sees the
@@ -124,10 +133,19 @@ async def caption_image(brand: str, image_path: Path, settings: Settings) -> Pos
         if settings.default_llm_model.startswith("openai/")
         else {"max_tokens": settings.llm_max_tokens}
     )
+    # LiteLLM implements json_object for Anthropic by forcing a tool call, which
+    # Claude 5.5+ rejects (400 "tool_choice: type any not supported"). The prompt
+    # already demands bare JSON, so Claude gets no response_format; fences are
+    # stripped below just in case.
+    fmt = (
+        {}
+        if settings.default_llm_model.startswith("anthropic/")
+        else {"response_format": {"type": "json_object"}}
+    )
     response = await litellm.acompletion(
         model=settings.default_llm_model,
         messages=messages,
-        response_format={"type": "json_object"},
+        **fmt,
         **token_cap,
         timeout=settings.llm_timeout_s,
         num_retries=settings.llm_num_retries,
@@ -135,7 +153,7 @@ async def caption_image(brand: str, image_path: Path, settings: Settings) -> Pos
         # loads them into Settings, not the environment.
         api_key=_provider_key(settings),
     )
-    content = response["choices"][0]["message"]["content"]
+    content = _strip_fences(response["choices"][0]["message"]["content"])
     try:
         data = json.loads(content)
         data = _unwrap_json_envelope(data)
