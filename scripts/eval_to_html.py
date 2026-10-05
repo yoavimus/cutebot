@@ -4,7 +4,7 @@ with each stock image beside every model's caption, for native-speaker review.
 Local file, no upload — images load by relative path from the repo root, so open the
 output from the repo root (where ``stock/`` lives).
 
-    python -m scripts.eval_to_html                     # eval_results.md -> eval_results.html
+    python -m scripts.eval_to_html                     # eval/eval_results.md -> eval/eval_results.html
     python -m scripts.eval_to_html --in x.md --out x.html
 """
 # ruff: noqa: E501 — embedded CSS/HTML template lines are intentionally long
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import html
+import os
 import re
 from pathlib import Path
 
@@ -106,17 +107,29 @@ main{max-width:1200px;margin:0 auto;padding:0 16px 60px}
 """
 
 
-def _img_src(img: dict, embed: bool) -> str:
+def _img_src(img: dict, embed: bool, out_dir: Path) -> str:
     """The <img src> value: a self-contained data URI when embedding (downscaled, so the
-    file stays small and sendable), else the relative path as-is."""
+    file stays small and sendable), else the stock path made relative to the output file."""
     src = img["src"] or ""
-    if not embed or not src:
-        return html.escape(src)
+    if not src:
+        return ""
+    if not embed:
+        return html.escape(os.path.relpath(src, out_dir))
     mime, b64 = load_image_b64(Path(src))  # downscales + JPEG-encodes; ~a few hundred KB
     return f"data:{mime};base64,{b64}"
 
 
-def render(images: list[dict], title: str, embed: bool = False) -> str:
+def cost_line(md: str) -> str:
+    """The ``Cost for N posts: ...`` header line written by eval_models, markdown stripped."""
+    for line in md.splitlines():
+        if line.startswith("Cost for "):
+            return line.replace("`", "")
+    return ""
+
+
+def render(
+    images: list[dict], title: str, embed: bool = False, out_dir: Path = Path("."), cost: str = ""
+) -> str:
     cards = []
     for img in images:
         cols = []
@@ -131,7 +144,7 @@ def render(images: list[dict], title: str, embed: bool = False) -> str:
                 + (f'<div class="rat">{html.escape(m["rationale"])}</div>' if m["rationale"] else "")
                 + "</div>"
             )
-        src = _img_src(img, embed)
+        src = _img_src(img, embed, out_dir)
         cards.append(
             f'<section class="imgcard"><h2>{html.escape(img["name"])}</h2>'
             f'<div class="body"><div class="photo"><img loading="lazy" src="{src}" alt=""></div>'
@@ -143,15 +156,17 @@ def render(images: list[dict], title: str, embed: bool = False) -> str:
         f"<title>{html.escape(title)}</title><style>{_CSS}</style></head><body>"
         f"<header><h1>{html.escape(title)}</h1>"
         f'<div class="sub">Native-Hebrew review · Hebrew is the quality gate, English is secondary · '
-        f"{len(images)} images × {len(images[0]['models']) if images else 0} models</div></header>"
+        f"{len(images)} images × {len(images[0]['models']) if images else 0} models</div>"
+        + (f'<div class="sub">{html.escape(cost)}</div>' if cost else "")
+        + "</header>"
         f"<main>{''.join(cards)}</main></body></html>"
     )
 
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--in", dest="src", default="eval_results.md")
-    p.add_argument("--out", default="eval_results.html")
+    p.add_argument("--in", dest="src", default="eval/eval_results.md")
+    p.add_argument("--out", default="eval/eval_results.html")
     p.add_argument(
         "--embed",
         action="store_true",
@@ -162,12 +177,18 @@ def main() -> None:
     images = parse(md)
     if not images:
         raise SystemExit(f"No image sections parsed from {args.src!r}.")
-    html_out = render(images, "Model eval — Hebrew quality gate", embed=args.embed)
+    html_out = render(
+        images,
+        "Model eval — Hebrew quality gate",
+        embed=args.embed,
+        out_dir=Path(args.out).parent,
+        cost=cost_line(md),
+    )
     Path(args.out).write_text(html_out, encoding="utf-8")
     if args.embed:
         print(f"Wrote {args.out} — self-contained, send it anywhere.")
     else:
-        print(f"Wrote {args.out} — open it from the repo root so stock/ images resolve.")
+        print(f"Wrote {args.out} — images load from stock/ by relative path.")
 
 
 if __name__ == "__main__":

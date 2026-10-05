@@ -17,6 +17,11 @@ class PostSuggestion(BaseModel):
     visual_concept: str = Field(description="A short description of the image the caption matches.")
     rationale: str = Field(default="", description="Why this fits the brand (for the reviewer).")
 
+    # Filled by app.llm from the provider's usage report, not by the model (excluded from
+    # dumps). Used by scripts.eval_models for the cost column.
+    tokens_in: int | None = Field(default=None, exclude=True)
+    tokens_out: int | None = Field(default=None, exclude=True)
+
 
 class PostOut(BaseModel):
     """API representation of a stored post."""
