@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import llm, stock
 from app.config import Settings
-from app.models import Post, PostStatus
+from app.models import BannedImage, Post, PostStatus
 from app.notifier.telegram import process_callback, process_message
 from app.pipeline import generate, review
 from app.schemas import PostSuggestion
@@ -227,6 +227,16 @@ async def test_published_post_cannot_be_flipped_callback(session: AsyncSession) 
     assert notifier.marks[0][1].status == PostStatus.PUBLISHED
 
 
+async def test_ban_image_reason_bans_the_photo(session: AsyncSession) -> None:
+    """🚫 Ban image chip → REJECTED with reason + the image is excluded from future picks."""
+    posts = await generate.generate_batch(session, n=1, brand="b")
+    notifier = _FakeNotifier()
+    await process_callback(session, notifier, _reason_cb(posts[0].id, "ban_image"))
+    assert posts[0].status == PostStatus.REJECTED
+    assert "banned" in notifier.toasts[0][1]
+    assert await session.get(BannedImage, posts[0].image_ref) is not None
+
+
 # ─────────────────────────────── /status command ─────────────────────────────
 
 
@@ -250,6 +260,30 @@ async def test_non_command_ignored(session: AsyncSession) -> None:
     notifier = _FakeNotifier()
     await process_message(session, notifier, _msg(_OWNER_ID, "hello"), _OWNER_SETTINGS)
     assert notifier.messages == []
+
+
+async def test_help_lists_every_command(session: AsyncSession) -> None:
+    from app.notifier.telegram import _COMMANDS
+
+    notifier = _FakeNotifier()
+    await process_message(session, notifier, _msg(_OWNER_ID, "/help"), _OWNER_SETTINGS)
+    assert all(cmd in notifier.messages[0] for cmd in _COMMANDS if cmd != "/start")
+
+
+async def test_stock_command_and_unban(session: AsyncSession, tmp_path: Path) -> None:
+    (tmp_path / "a.jpg").write_bytes(b"\xff\xd8\xff")
+    settings = _OWNER_SETTINGS.model_copy(update={"stock_images_dir": str(tmp_path)})
+    await stock.ban_image(session, "a.jpg")
+    await session.commit()
+
+    notifier = _FakeNotifier()
+    await process_message(session, notifier, _msg(_OWNER_ID, "/stock"), settings)
+    assert "1 banned" in notifier.messages[0] and "a.jpg" in notifier.messages[0]
+
+    await process_message(session, notifier, _msg(_OWNER_ID, "/stock unban a.jpg"), settings)
+    assert "back in the pool" in notifier.messages[1]
+    await process_message(session, notifier, _msg(_OWNER_ID, "/stock unban a.jpg"), settings)
+    assert "not banned" in notifier.messages[2]
 
 
 # ─────────────────────────────── /generate command ───────────────────────────

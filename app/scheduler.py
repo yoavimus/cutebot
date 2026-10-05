@@ -8,6 +8,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app import stock
 from app.config import Settings
 from app.notifier.base import Notifier
 from app.pipeline import generate, publish, review
@@ -28,6 +29,11 @@ def build_scheduler(
         async with sessionmaker() as session:
             posts = await generate.generate_batch(session)
             await review.send_for_review(posts, notifier)
+            warning = await stock.low_stock_message(
+                session, settings, len(posts), settings.batch_size
+            )
+            if warning:
+                await notifier.send_message(warning)
 
     async def posting_tick() -> None:
         async with sessionmaker() as session:

@@ -3,7 +3,8 @@
 Callback data:
   ``approve:<post_id>``            → approve the post
   ``reject:<post_id>``             → show reason-picker chips
-  ``reason:<post_id>:<reason>``    → reject with the given reason (or "skip")
+  ``reason:<post_id>:<reason>``    → reject with the given reason (or "skip");
+                                     ``ban_image`` also bans the photo from future batches
 
 Run modes (CLI):
     python -m app.notifier.telegram poll           # long-poll (no public URL needed)
@@ -24,8 +25,9 @@ import httpx
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import stock
 from app.config import Settings, get_settings
-from app.models import Post, PostStatus
+from app.models import BannedImage, Post, PostStatus
 from app.pipeline.review import handle_decision
 from app.render import image_path, render_full_caption
 
@@ -42,6 +44,20 @@ _REJECT_REASONS: dict[str, str] = {
     "image": "🖼 Image",
     "boring": "😴 Boring",
 }
+# Rejecting with this reason also bans the image from future suggestions.
+_BAN_REASON = "ban_image"
+
+# Shown in Telegram's "/" menu (setMyCommands) and by /help. Order = menu order.
+_COMMAND_HELP: list[tuple[str, str]] = [
+    ("status", "pipeline counts, queue depth, stock"),
+    ("pending", "resend every suggestion awaiting review"),
+    ("queue", "approved posts in posting order"),
+    ("generate", "generate a batch now: /generate [n]"),
+    ("postnow", "publish next in queue, or /postnow <id>"),
+    ("requeue", "put a failed post back: /requeue <id>"),
+    ("stock", "stock library counts; /stock unban <file>"),
+    ("help", "this list"),
+]
 
 
 class TelegramNotifier:
@@ -111,6 +127,19 @@ class TelegramNotifier:
                 json={"chat_id": self._settings.telegram_chat_id, "text": text},
             )
 
+    async def set_my_commands(self) -> None:
+        """Register the command list so Telegram shows its native Menu button."""
+        if not self._settings.telegram_bot_token:
+            return
+        commands = [{"command": c, "description": d} for c, d in _COMMAND_HELP]
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(self._url("setMyCommands"), json={"commands": commands})
+            if not resp.json().get("ok"):
+                logger.warning("setMyCommands rejected: %s", resp.json().get("description"))
+        except Exception as exc:  # noqa: BLE001 — a menu glitch must never block startup
+            logger.warning("setMyCommands failed: %s", exc)
+
     async def answer_callback(self, callback_query_id: str, text: str) -> None:
         async with httpx.AsyncClient(timeout=15) as client:
             await client.post(
@@ -170,7 +199,10 @@ class TelegramNotifier:
         keyboard = {
             "inline_keyboard": [
                 reason_row,
-                [{"text": "Skip", "callback_data": f"reason:{post_id}:skip"}],
+                [
+                    {"text": "🚫 Ban image", "callback_data": f"reason:{post_id}:{_BAN_REASON}"},
+                    {"text": "Skip", "callback_data": f"reason:{post_id}:skip"},
+                ],
             ]
         }
         chat_id = cb_message["chat"]["id"]
@@ -206,7 +238,7 @@ _TERMINAL_CB = {PostStatus.PUBLISHING, PostStatus.PUBLISHED, PostStatus.FAILED}
 # ─────────────────────────────── status helper ───────────────────────────────
 
 
-async def _build_status_summary(session: AsyncSession) -> str:
+async def _build_status_summary(session: AsyncSession, settings: Settings) -> str:
     rows = (await session.execute(select(Post.status, func.count()).group_by(Post.status))).all()
     counts: dict[PostStatus, int] = {r[0]: r[1] for r in rows}
     recent = (
@@ -224,6 +256,7 @@ async def _build_status_summary(session: AsyncSession) -> str:
             lines.append(f"  {s}: {n}")
     queue_depth = counts.get(PostStatus.APPROVED, 0) + counts.get(PostStatus.PUBLISHING, 0)
     lines.append(f"\nQueue depth: {queue_depth}")
+    lines.append(stock.summary_line(await stock.counts(session, settings)))
     if recent:
         lines.append("\nLast published:")
         for p in recent:
@@ -238,7 +271,41 @@ async def _build_status_summary(session: AsyncSession) -> str:
 async def _cmd_status(
     session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
 ) -> None:
-    await notifier.send_message(await _build_status_summary(session))
+    await notifier.send_message(await _build_status_summary(session, settings))
+
+
+async def _cmd_help(
+    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+) -> None:
+    lines = ["Commands:"] + [f"/{c} — {d}" for c, d in _COMMAND_HELP]
+    lines.append(
+        "\nReview cards: ✅ Approve · ❌ Reject (pick a reason; 🚫 Ban image retires the photo)."
+    )
+    lines.append("Send a photo to add it to the stock library.")
+    await notifier.send_message("\n".join(lines))
+
+
+async def _cmd_stock(
+    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+) -> None:
+    sub, _, ref = args.partition(" ")
+    if sub == "unban":
+        if await stock.unban_image(session, ref.strip()):
+            await session.commit()
+            await notifier.send_message(f"{ref.strip()} is back in the pool.")
+        else:
+            await notifier.send_message(
+                f"{ref.strip() or '<file>'} is not banned. Usage: /stock unban <file>"
+            )
+        return
+    c = await stock.counts(session, settings)
+    banned = (
+        await session.scalars(select(BannedImage.image_ref).order_by(BannedImage.image_ref))
+    ).all()
+    lines = [stock.summary_line(c)]
+    if banned:
+        lines.append("Banned: " + ", ".join(banned))
+    await notifier.send_message("\n".join(lines))
 
 
 async def _cmd_generate(
@@ -251,6 +318,8 @@ async def _cmd_generate(
     posts = await generate.generate_batch(session, n=n)
     await _rev.send_for_review(posts, notifier)
     await notifier.send_message(f"Generated {len(posts)} post(s) — check your review DMs.")
+    if warning := await stock.low_stock_message(session, settings, len(posts), n):
+        await notifier.send_message(warning)
 
 
 async def _cmd_postnow(
@@ -338,6 +407,9 @@ _COMMANDS: dict[str, Any] = {
     "/queue": _cmd_queue,
     "/requeue": _cmd_requeue,
     "/pending": _cmd_pending,
+    "/stock": _cmd_stock,
+    "/help": _cmd_help,
+    "/start": _cmd_help,
 }
 
 
@@ -444,6 +516,10 @@ async def process_callback(session: AsyncSession, notifier: TelegramNotifier, cb
             toast = f"Already {post.status}"
         else:
             toast = "❌ Rejected" + (f" ({reason_str})" if reason else "")
+        if reason == _BAN_REASON and post.status == PostStatus.REJECTED:
+            await stock.ban_image(session, post.image_ref)
+            await session.commit()
+            toast = "❌ Rejected · 🚫 image banned"
 
         await notifier.mark_decided(cb["message"], post, reason=reason)
         logger.info(
@@ -518,6 +594,7 @@ async def _poll() -> None:
 
     settings = get_settings()
     notifier = TelegramNotifier(settings)
+    await notifier.set_my_commands()
     offset = 0
     logger.info("Polling Telegram for updates… (Ctrl-C to stop)")
     async with httpx.AsyncClient(timeout=40) as client:

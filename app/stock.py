@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
-from app.models import Post, PostStatus
+from app.models import BannedImage, Post, PostStatus
 
 logger = logging.getLogger(__name__)
 
@@ -35,35 +35,83 @@ def list_images(settings: Settings) -> list[Path]:
 _COMMITTED = {PostStatus.APPROVED, PostStatus.PUBLISHING, PostStatus.PUBLISHED}
 
 
-async def select_images(session: AsyncSession, n: int, settings: Settings) -> list[Path]:
-    """Pick ``n`` images randomly, preferring ones not tied to committed posts.
+async def _pools(
+    session: AsyncSession, settings: Settings
+) -> tuple[list[Path], set[str], set[str]]:
+    """All images on disk + the refs that are committed (used) and banned."""
+    images = list_images(settings)
+    committed = set(
+        (await session.scalars(select(Post.image_ref).where(Post.status.in_(_COMMITTED)))).all()
+    )
+    banned = set((await session.scalars(select(BannedImage.image_ref))).all())
+    return images, committed, banned
 
-    "Committed" = APPROVED/PUBLISHING/PUBLISHED. Rejected and suggested images are
-    free to reuse. If the uncommitted pool runs dry, cycles from committed images.
-    Returns fewer than ``n`` only if the stock library is totally empty.
+
+async def select_images(session: AsyncSession, n: int, settings: Settings) -> list[Path]:
+    """Pick up to ``n`` random images that are neither used by a committed post nor banned.
+
+    "Committed" = APPROVED/PUBLISHING/PUBLISHED. Rejected and suggested images are free
+    to reuse. Never recycles a used image: when the pool runs dry it returns fewer than
+    ``n`` and the caller tells the owner to upload more (see ``counts``).
     """
     stock_dir = Path(settings.stock_images_dir)
-    images = list_images(settings)
+    images, committed, banned = await _pools(session, settings)
     if not images:
         logger.warning("Stock library %s is empty — no images to select.", stock_dir)
         return []
+    unused = [p for p in images if str(p.relative_to(stock_dir)) not in committed | banned]
+    if len(unused) < n:
+        logger.warning("Stock library low: %d unused image(s), %d requested.", len(unused), n)
+    return random.sample(unused, min(n, len(unused)))
 
-    committed_refs = set(
-        (await session.scalars(select(Post.image_ref).where(Post.status.in_(_COMMITTED)))).all()
+
+async def counts(session: AsyncSession, settings: Settings) -> dict[str, int]:
+    """``{"unused", "used", "banned", "total"}`` for /status and /stock."""
+    stock_dir = Path(settings.stock_images_dir)
+    images, committed, banned = await _pools(session, settings)
+    refs = {str(p.relative_to(stock_dir)) for p in images}
+    return {
+        "unused": len(refs - committed - banned),
+        "used": len(refs & committed),
+        "banned": len(refs & banned),
+        "total": len(refs),
+    }
+
+
+def summary_line(c: dict[str, int]) -> str:
+    return (
+        f"Stock: {c['unused']} unused / {c['used']} used / {c['banned']} banned "
+        f"({c['total']} files)"
     )
-    unused = [p for p in images if str(p.relative_to(stock_dir)) not in committed_refs]
-    committed = [p for p in images if str(p.relative_to(stock_dir)) in committed_refs]
 
-    selected = random.sample(unused, min(n, len(unused)))
-    if len(selected) < n:
-        shortfall = n - len(selected)
-        cycle = committed if committed else images
-        if committed:
-            logger.warning(
-                "Stock library exhausted — all committed images in use. Add more images."
-            )
-        selected += [cycle[i % len(cycle)] for i in range(shortfall)]
-    return selected
+
+async def low_stock_message(
+    session: AsyncSession, settings: Settings, got: int, wanted: int
+) -> str | None:
+    """Owner-facing text when a batch came back short because the unused pool ran dry."""
+    if got >= wanted:
+        return None
+    c = await counts(session, settings)
+    return (
+        f"Only {got} of {wanted} generated — {summary_line(c)}.\n"
+        "Send photos to this chat to add them to the stock library."
+    )
+
+
+async def ban_image(session: AsyncSession, image_ref: str) -> None:
+    """Idempotent: a second ban of the same ref is a no-op."""
+    if await session.get(BannedImage, image_ref) is None:
+        session.add(BannedImage(image_ref=image_ref))
+        await session.flush()
+
+
+async def unban_image(session: AsyncSession, image_ref: str) -> bool:
+    row = await session.get(BannedImage, image_ref)
+    if row is None:
+        return False
+    await session.delete(row)
+    await session.flush()
+    return True
 
 
 def load_image_b64(path: Path, max_edge: int = 1568) -> tuple[str, str]:

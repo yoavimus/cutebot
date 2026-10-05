@@ -50,6 +50,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.scheduler = scheduler
     if not settings.is_dev and settings.telegram_webhook_base:
         await _set_webhook()
+        await notifier.set_my_commands()
     live = settings.publishing_enabled and bool(
         settings.instagram_access_token and settings.instagram_ig_user_id
     )
