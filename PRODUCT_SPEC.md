@@ -70,12 +70,14 @@ external worker in v1 — the scheduler runs in the app process.
 
 ### Key design decisions
 - **Single LLM agent, provider-agnostic.** All model calls go through `app/llm.py`,
-  which wraps LiteLLM. Model is set by `DEFAULT_LLM_MODEL` (default
-  `anthropic/claude-sonnet-4-6`). Switching providers is a one-env-var change.
+  which wraps LiteLLM. Model is set by `DEFAULT_LLM_MODEL` (default `openai/gpt-5.1`,
+  chosen by the native-Hebrew eval — DEV_GUIDELINES "Model decision"). Switching
+  providers is a one-env-var change.
 - **Notifier is an interface.** `app/notifier/base.py` defines `Notifier`; Telegram is
   the first adapter. Discord/Slack are drop-in future adapters.
 - **Publishers are interfaces.** `app/publishers/base.py` defines `Publisher`; each
-  network is an adapter. v1 ships functional **stubs** that log instead of posting.
+  network is an adapter. **Instagram is live** (Graph API, since 2026-10-05); TikTok
+  and X are still logging stubs.
 - **Structured data over parsing.** The LLM returns structured post objects (Hebrew +
   English caption + visual concept + rationale), validated by a Pydantic schema — never
   free-text parsing.

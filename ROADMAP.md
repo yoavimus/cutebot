@@ -152,10 +152,10 @@ slots run in Israel time and survive restarts — **verified via prod dry run.**
 
 ## M7 — First real publisher: Instagram
 
-> Code shipped 2026-07-14 — tickets CUT-56…60; plan: `M7_PLAN.md`. **Activation is
-> blocked on CUT-61 (Meta business verification / App Review)** — an external,
-> weeks-long human process, not code. Until creds land, `get_publishers()` falls back
-> to the Instagram stub automatically, so the pipeline keeps running unaffected.
+> Shipped ✅ — code 2026-07-14 (tickets CUT-56…60), **live on Instagram 2026-10-05**
+> (CUT-61: Meta approval + prod smoke, test post published and deleted). Plan archived
+> at `docs/archive/M7_PLAN.md`. Without creds, `get_publishers()` falls back to the
+> Instagram stub automatically.
 
 - [x] **M7.1** — real Instagram Graph adapter (`app/publishers/instagram.py`):
       container create → poll `status_code` → `media_publish`; image-spec validation
@@ -174,39 +174,61 @@ slots run in Israel time and survive restarts — **verified via prod dry run.**
 - [x] **M7.5** — offline Graph-mock tests (happy path, error mapping, out-of-spec
       image, container-resume idempotency) + the crash-recovery tests proving a
       restart after `media_publish` never re-publishes.
-- [ ] **M7.6** — Meta app + Instagram Graph product, Business Verification, App
+- [x] **M7.6** — Meta app + Instagram Graph product, Business Verification, App
       Review (`instagram_basic`, `instagram_content_publish`, `pages_show_list`,
-      `pages_read_engagement`), long-lived token, prod smoke against a test IG
-      account. **Owner action required** — see CUT-61.
+      `pages_read_engagement`), long-lived token, prod smoke (CUT-61) — done
+      2026-10-05: a real post went live on the owner's Instagram and was deleted after.
 
-Carousel/multi-image stays **deferred to the backlog** (needs a `post-images` table +
-generation/review rework).
+Carousel/multi-image graduated to **M9** below.
 
-**DoD:** code path proven end-to-end offline; real posting is one owner-side
-credentials step away once Meta approves the app.
+**DoD:** a real Instagram post from the pipeline — **met 2026-10-05.**
 
 ---
 
 ## Post-v1 (decided 2026-07-08 — see `docs/POST_V1_REVIEW.md` for the reasoning)
 
 Standing task (not a milestone): **model eval** — `scripts/eval_models.py` bake-off,
-native Hebrew review by the owner. Round 1: Claude Sonnet / Claude Opus / same-tier
-GPT (pending Anthropic credits); round 2 adds Gemini. Resolves the DEV_GUIDELINES
-"Model decision" open item.
+native Hebrew review by the owner. Round 1 (2026-10, Sonnet 4.6 / Opus 4.8 / GPT-5.1)
+→ **GPT-5.1** is the runtime default. Round 2: Claude Sonnet 5.5 / Opus 5.5 / GPT-6 Sol
+/ GPT-6 Luna, with a cost-per-post column. Re-run after each provider release.
+
+Owner review 2026-10-05: `docs/issues/cutebot_issues_05_10_2026.md` + findings (items
+1–9). Shipped the same day: Telegram command menu + `/help`, `/stock` + "🚫 Ban image"
+reject chip, no stock recycling, eval cost column.
 
 1. **M8 — learning loop v1** (spec A; medium): few-shot from accumulated approvals +
    reject-reason conditioning; recent-post memory ("don't repeat these"); measured
    with the eval harness. **Brand distillation** (strong model proposes `brand.md`
    diffs from feedback, owner approves in Telegram) lands here or M9.
-2. **Later, relative order unchanged:** C — approve-with-edits → D — more review
-   channels (re-aimed at **WhatsApp Business** for the Israeli market, not
-   Discord/Slack) → F — analytics feedback → G — multi-tenant → B — image generation
-   (*deferred for the foreseeable future*).
+   **Includes C — "✏️ Fix" button** (approve with a wording/spelling edit): stateless
+   via Telegram `ForceReply` carrying `#<post id>`, reply replaces `caption_he` (`en:`
+   prefix for English), status → approved, `Feedback` keeps original → edited — the
+   strongest few-shot signal M8 has. Skip diff view / partial edits until the edit log
+   shows a need.
+2. **M9 — Carousel posts** (graduated from backlog 2026-10-05):
+   - Storage: JSON list column `image_refs` on `Post` (one migration; `image_ref`
+     stays as the cover). A join table only when slides need per-slide captions.
+   - Generation: 3–5 unused images in one vision call → connecting story + one caption.
+   - Review: `sendMediaGroup` for the images; media groups can't carry inline buttons,
+     so the Approve/Reject card is a second message (`send_suggestion` rework).
+   - Publish: IG Graph N child containers → one `CAROUSEL` container → publish; the
+     existing container-resume/idempotency path extends to it.
+   - **First task: a `## Carousels` section in `brand.md` with 2–3 sample stories** —
+     the prompt can't be written without knowing what a good one looks like.
+3. **Later, relative order unchanged:** D — more review channels (re-aimed at
+   **WhatsApp Business** for the Israeli market, not Discord/Slack) → F — analytics
+   feedback → G — multi-tenant.
 
 ## Backlog (untriaged)
 
 > Ideas land here (not in PRODUCT_SPEC); milestones graduate out of it.
 
-- **Instagram carousel / multi-image posts** — deferred out of M7 (2026-07-14). Needs a
-  `post-images` table and generation + review-DM rework to carry multiple images per post;
-  M7 ships single-image feed posts. Graduate into a milestone when multi-image demand is real.
+- **Generated media from brand designs** (image + short clip from a designated design,
+  e.g. a shirt print placed into a generated scene/story) — spec item B widened.
+  Story text is trivial; image-to-image with a reference design is feasible but
+  design-consistency is unreliable (~1 in 4 usable); video is expensive and keeps a
+  specific print consistent across frames poorly. **Wait for cheaper, more
+  design-consistent image/video models; re-check at each model-eval round.** When it
+  looks viable: a half-day spike (10 generations from one design, judged in Telegram)
+  before any milestone. Needs an explicit decision against PRODUCT_SPEC §3's
+  stock-only rule and the brand's "real details, not stock photos" direction.

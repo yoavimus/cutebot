@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./cutebot.db"
 
     # AI — single agent via LiteLLM (Claude by default)
-    default_llm_model: str = "anthropic/claude-sonnet-4-6"
+    default_llm_model: str = "openai/gpt-5.1"
     anthropic_api_key: str = ""
     openai_api_key: str = ""
 

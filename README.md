@@ -30,12 +30,13 @@ future suggestions.
 
 - **Backend / pipeline**: Python 3.12 · FastAPI · async SQLAlchemy
 - **Scheduler**: APScheduler (in-process; no Redis/worker)
-- **AI**: a single LiteLLM function-calling agent, **Claude by default**
-  (`DEFAULT_LLM_MODEL=anthropic/claude-sonnet-4-6`) — one-env-var switch to any provider
+- **AI**: a single LiteLLM agent returning structured posts; model chosen by a
+  native-Hebrew eval (`DEFAULT_LLM_MODEL=openai/gpt-5.1`) — one-env-var switch to any
+  provider
 - **Review channel**: Telegram bot (inline buttons); notifier interface is
   platform-agnostic so Discord/Slack can be added as adapters
-- **Publishers**: pluggable per-network adapters (Instagram / TikTok / X) behind one
-  interface; ship as stubs in v1
+- **Publishers**: pluggable per-network adapters behind one interface — **Instagram
+  live** (Graph API); TikTok / X are stubs
 - **Database**: PostgreSQL (async)
 - **Deployment**: any container host (Railway-friendly)
 
@@ -70,10 +71,10 @@ inventory.
 generate → review → queue → publish loop runs autonomously: image-first vision
 captioning (Hebrew + English), Telegram review with reversible Approve/Reject and
 one-tap reject reasons, a full operator console over Telegram commands
-(`/generate`, `/postnow`, `/queue`, `/pending`, `/requeue`, `/status`, photo upload
-→ stock), and timezone-aware scheduled publishing. Publishers are still **logging
-stubs** — the first real network integration (Instagram) is the next major
-milestone. See `ROADMAP.md` for sequencing and `PRODUCT_SPEC.md` for scope.
+(`/generate`, `/postnow`, `/queue`, `/pending`, `/requeue`, `/stock`, `/status`,
+`/help`, photo upload → stock), and timezone-aware scheduled publishing.
+**Instagram publishing is live** (Graph API, first real post 2026-10-05); TikTok / X
+remain logging stubs. See `ROADMAP.md` for sequencing and `PRODUCT_SPEC.md` for scope.
 
 ## License
 

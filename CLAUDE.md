@@ -15,10 +15,12 @@ review channels, real publishers, analytics, multi-tenant.
 
 ## AI / model strategy (runtime)
 
-- The pipeline's **runtime** LLM is **Claude via LiteLLM**, set by `DEFAULT_LLM_MODEL`
-  (default `anthropic/claude-sonnet-4-6` — cost-effective for high-volume copywriting;
-  switch to `anthropic/claude-opus-4-8` for max quality). One-env-var provider switch.
-- All model calls go through `app/llm.py` — never call LiteLLM/Anthropic SDK directly
+- The pipeline's **runtime** LLM goes through **LiteLLM**, set by `DEFAULT_LLM_MODEL`
+  (default `openai/gpt-5.1` — won the 2026-10 native-Hebrew eval round 1 over Claude
+  Sonnet 4.6 / Opus 4.8; see DEV_GUIDELINES "Model decision"). One-env-var provider
+  switch; the choice is re-evaluated with `scripts/eval_models.py` after each provider
+  release.
+- All model calls go through `app/llm.py` — never call LiteLLM/provider SDKs directly
   from pipeline code. The agent returns **structured** post objects (Pydantic), never
   free-text to be parsed.
 - This is separate from the Claude model used to *develop* CuteBot.
@@ -31,8 +33,9 @@ review channels, real publishers, analytics, multi-tenant.
   `list_issues(team="CuteBot", query="M6")` and **no `state` filter** — new tickets
   land in **Backlog**, so a `state: "Todo"` filter returns empty and has already
   caused a duplicate ticket set (M6, 2026-07-08).
-- The active milestone plan (`M<N>_PLAN.md` at repo root) lists its ticket IDs in the
-  header — those are canonical; implement against them.
+- The active milestone plan (`docs/plans/<ticket>.md`; shipped plans move to
+  `docs/archive/M<N>_PLAN.md`) lists its ticket IDs in the header — those are canonical;
+  implement against them. Owner issue lists + findings live in `docs/issues/`.
 - When creating tickets, set `state: "Todo"` explicitly so default-state mismatches
   can't hide them.
 
