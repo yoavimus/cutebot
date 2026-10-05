@@ -10,10 +10,12 @@ Usage (from the repo root, venv active, keys in .env):
     python -m scripts.eval_models --models anthropic/claude-sonnet-5-5,openai/gpt-6-sol
     python -m scripts.eval_models --images 5 --out eval/eval_results.md
 
-Each model header carries elapsed time and the cost of that one post (from the
-provider's usage report x the list prices in PRICES); the file header totals cost per
-model. Candidates whose provider key is missing produce the offline stub — obvious in
-the output, not an error.
+A candidate is ``<litellm id>[@<reasoning effort>]`` — ``openai/gpt-6.1-sol@high``
+runs Sol at high reasoning; no suffix = provider default. (Effort applies to OpenAI
+models only.) Each model header carries elapsed time and the cost of that one post
+(provider usage report x LiteLLM's bundled price table); the file header totals
+cost per candidate. Candidates whose provider key is missing produce the offline stub —
+obvious in the output, not an error.
 """
 
 from __future__ import annotations
@@ -33,26 +35,18 @@ from app.config import get_settings
 DEFAULT_MODELS = [
     "anthropic/claude-sonnet-5-5",
     "anthropic/claude-opus-5-5",
-    "openai/gpt-6-sol",
-    "openai/gpt-6-luna",
+    "openai/gpt-6.1-sol@medium",
+    "openai/gpt-6.1-sol@xhigh",
 ]
 
-# $ per 1M tokens (input, output), list prices as of 2026-10-05. Unknown model → cost "?".
-PRICES: dict[str, tuple[float, float]] = {
-    "anthropic/claude-sonnet-5-5": (2.0, 10.0),
-    "anthropic/claude-opus-5-5": (4.0, 20.0),
-    "openai/gpt-6-sol": (2.0, 10.0),
-    "openai/gpt-6-luna": (0.10, 0.50),
-    "anthropic/claude-sonnet-4-6": (3.0, 15.0),
-    "anthropic/claude-opus-4-8": (5.0, 25.0),
-}
-
-
 def post_cost(model: str, tokens_in: int | None, tokens_out: int | None) -> float | None:
-    price = PRICES.get(model)
-    if price is None or tokens_in is None or tokens_out is None:
+    """Cost of one call from LiteLLM's bundled price table (None if the id is unknown)."""
+    import litellm
+
+    price = litellm.model_cost.get(model.split("@")[0].split("/", 1)[-1])
+    if not price or tokens_in is None or tokens_out is None:
         return None
-    return (tokens_in * price[0] + tokens_out * price[1]) / 1_000_000
+    return tokens_in * price["input_cost_per_token"] + tokens_out * price["output_cost_per_token"]
 
 
 async def run(models: list[str], n_images: int, out: str) -> None:
@@ -79,7 +73,10 @@ async def run(models: list[str], n_images: int, out: str) -> None:
     for image in sample:
         lines += [f"## {image.name}", "", f"![{image.name}]({image.as_posix()})", ""]
         for model in models:
-            s = settings.model_copy(update={"default_llm_model": model})
+            model_id, _, effort = model.partition("@")
+            s = settings.model_copy(
+                update={"default_llm_model": model_id, "llm_reasoning_effort": effort}
+            )
             t0 = time.monotonic()
             try:
                 sug = await llm.caption_image(brand, image, s)

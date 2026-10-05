@@ -128,11 +128,15 @@ async def caption_image(brand: str, image_path: Path, settings: Settings) -> Pos
     ]
     # OpenAI models (GPT-5+/GPT-6/o-series) reject the legacy max_tokens and want
     # max_completion_tokens; everything else (incl. Claude) uses max_tokens.
-    token_cap = (
-        {"max_completion_tokens": settings.llm_max_tokens}
-        if settings.default_llm_model.startswith("openai/")
-        else {"max_tokens": settings.llm_max_tokens}
-    )
+    is_openai = settings.default_llm_model.startswith("openai/")
+    effort = settings.llm_reasoning_effort if is_openai else ""
+    cap = settings.llm_max_tokens
+    if effort and effort != "none":
+        # reasoning tokens count against the completion cap — a tight cap returns
+        # empty content instead of a caption.
+        cap = max(cap, 8000)
+    token_cap = {"max_completion_tokens": cap} if is_openai else {"max_tokens": cap}
+    extra = {"reasoning_effort": effort} if effort else {}
     # LiteLLM implements json_object for Anthropic by forcing a tool call, which
     # Claude 5.5+ rejects (400 "tool_choice: type any not supported"). The prompt
     # already demands bare JSON, so Claude gets no response_format; fences are
@@ -147,6 +151,7 @@ async def caption_image(brand: str, image_path: Path, settings: Settings) -> Pos
         messages=messages,
         **fmt,
         **token_cap,
+        **extra,
         timeout=settings.llm_timeout_s,
         num_retries=settings.llm_num_retries,
         # LiteLLM only reads keys from os.environ; pass explicitly since pydantic-settings
