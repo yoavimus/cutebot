@@ -83,21 +83,21 @@ _CSS = """
 @media(prefers-color-scheme:dark){:root{--bg:#16151a;--card:#201f26;--ink:#ececef;--muted:#9a97a3;--line:#322f3a;--accent:#a78bfa}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
-header{padding:24px 16px;max-width:1200px;margin:0 auto}
+header{padding:24px 16px;max-width:1560px;margin:0 auto}
 h1{font-size:1.4rem;margin:0 0 4px}
 .sub{color:var(--muted);font-size:.9rem}
-main{max-width:1200px;margin:0 auto;padding:0 16px 60px}
+main{max-width:1560px;margin:0 auto;padding:0 16px 60px}
 .imgcard{background:var(--card);border:1px solid var(--line);border-radius:14px;margin:22px 0;overflow:hidden}
 .imgcard>h2{font-size:.95rem;color:var(--muted);font-weight:600;margin:0;padding:12px 16px;border-bottom:1px solid var(--line);font-family:ui-monospace,Menlo,monospace}
 .body{display:grid;grid-template-columns:minmax(240px,340px) 1fr;gap:0}
 .photo{padding:16px;border-inline-end:1px solid var(--line)}
 .photo img{width:100%;border-radius:10px;display:block}
-.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
+.cols{display:grid;grid-template-columns:repeat(var(--n),minmax(220px,1fr));overflow-x:auto}
 .model{padding:16px;border-inline-start:1px solid var(--line)}
 .model:first-child{border-inline-start:0}
-.mhead{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:10px}
-.mname{font-weight:700;font-size:.82rem}
-.time{font-family:ui-monospace,Menlo,monospace;font-size:.72rem;color:#fff;background:var(--accent);padding:2px 7px;border-radius:999px;white-space:nowrap}
+.mhead{display:flex;flex-direction:column;align-items:flex-start;gap:6px;margin-bottom:10px;min-width:0}
+.mname{font-weight:700;font-size:.82rem;overflow-wrap:anywhere}
+.time{font-family:ui-monospace,Menlo,monospace;font-size:.72rem;color:#fff;background:var(--accent);padding:2px 7px;border-radius:999px;max-width:100%;overflow-wrap:anywhere}
 .lbl{font-size:.68rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:12px 0 2px}
 .he{direction:rtl;text-align:right}
 .he p,.en p{margin:.3em 0}
@@ -148,7 +148,7 @@ def render(
         cards.append(
             f'<section class="imgcard"><h2>{html.escape(img["name"])}</h2>'
             f'<div class="body"><div class="photo"><img loading="lazy" src="{src}" alt=""></div>'
-            f'<div class="cols">{"".join(cols)}</div></div></section>'
+            f'<div class="cols" style="--n:{len(cols)}">{"".join(cols)}</div></div></section>'
         )
     return (
         f"<!doctype html><html lang=he><head><meta charset=utf-8>"
