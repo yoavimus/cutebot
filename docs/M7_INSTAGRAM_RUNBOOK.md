@@ -64,6 +64,9 @@ GET https://graph.facebook.com/{graph_version}/{page_id}?fields=instagram_busine
 
 ## 5. Deploy + prod smoke (against a **test** IG account first)
 
+> ✅ Smoke verified 2026-10-05 — a pipeline post went live on the owner's Instagram
+> (deleted afterwards). Steps kept for re-activation / token rotation.
+
 1. Set `INSTAGRAM_ACCESS_TOKEN`, `INSTAGRAM_IG_USER_ID`, `PUBLIC_BASE_URL` in Railway.
 2. `railway up` — confirm `alembic upgrade head` applies migration `0004`.
 3. Approve a post via Telegram; at the next posting slot, confirm on the test IG

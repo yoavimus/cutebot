@@ -76,38 +76,47 @@ python -m app.notifier.telegram delete-webhook
 ### Bot commands (owner-gated; work in dev and prod — M6)
 
 ```
-/status          counts by status, queue depth, last 5 published
+/status          counts by status, queue depth, stock counts, last 5 published
 /generate [N]    generate N suggestions now (default BATCH_SIZE) + DM for review
 /postnow [id]    publish front-of-queue, or a specific APPROVED post by id
 /queue           approved posts in queue order
 /pending         re-DM undecided suggestions (lost-DM recovery)
 /requeue <id>    move a FAILED post back into the queue
+/stock           unused / used / banned counts + banned list; /stock unban <file>
+/help            this list (also /start)
 (photo DM)       save the photo into the stock library
 ```
 
-Rejecting a post (❌) offers one-tap reason chips (voice/hebrew/image/boring/skip) —
-stored on `Feedback.reason`, the future learning-loop signal.
+The same list is registered with `setMyCommands` at startup, so Telegram's blue
+**Menu** button shows every command. Rejecting a post (❌) offers one-tap reason chips
+(voice/hebrew/image/boring/skip) — stored on `Feedback.reason`, the learning-loop
+signal — plus **🚫 Ban image**, which also retires the photo from future batches
+(`banned_images` table; the file stays on disk so `/media` keeps serving). Images used
+by approved/published posts are never recycled; a short batch DMs a low-stock warning.
 
 ## Model eval (Hebrew quality bake-off)
 
 ```bash
 # Same images + brand file across candidate models, side-by-side Markdown for review.
 # Keys come from .env; a candidate without its provider key yields the offline stub.
+# Each model header shows elapsed time + cost of that post (usage x list prices in
+# PRICES); the file header totals cost per model. Output lands in eval/ (gitignored).
 python -m scripts.eval_models                          # default candidate list
-python -m scripts.eval_models --models anthropic/claude-sonnet-4-6,openai/gpt-5.1
-python -m scripts.eval_models --images 5 --out eval_results.md
+python -m scripts.eval_models --models anthropic/claude-sonnet-5-5,openai/gpt-6-sol
+python -m scripts.eval_models --images 5 --out eval/eval_results.md
 
-# Render the results as a side-by-side HTML page. Open from the repo root so stock/
-# images resolve (local, no upload).
-python -m scripts.eval_to_html                          # eval_results.md -> eval_results.html
+# Render the results as a side-by-side HTML page (local, no upload; images load from
+# stock/ by relative path).
+python -m scripts.eval_to_html                          # eval/eval_results.md -> eval/eval_results.html
 # --embed inlines downscaled images as data URIs → one self-contained file you can
 # send to anyone (no stock/ folder needed on their end).
-python -m scripts.eval_to_html --embed --out eval_comparison_shareable.html
+python -m scripts.eval_to_html --embed --out eval/eval_comparison_shareable.html
 ```
 
-Review the output natively, then record the decision in `DEV_GUIDELINES.md`
-("Model decision") and update `PRODUCT_SPEC.md` + `env.example` if the winner
-isn't Claude.
+Standing task — re-run after each provider release, review natively, record the
+decision in `DEV_GUIDELINES.md` ("Model decision"); if the winner changes, update
+`PRODUCT_SPEC.md` §3 + `CLAUDE.md` + `env.example` + the config default together.
+When a new model id appears, add its list price to `PRICES` in `scripts/eval_models.py`.
 
 ## Quality gates
 

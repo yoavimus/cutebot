@@ -76,6 +76,19 @@ class Post(Base):
     feedback: Mapped[list[Feedback]] = relationship(back_populates="post")
 
 
+class BannedImage(Base):
+    """A stock image the owner never wants suggested again (Telegram "🚫 Ban image").
+
+    The file stays on disk so ``/media`` keeps serving posts that already used it; the
+    DB is the only ledger of what's eligible (see docs/issues findings 2026-10-05 §2/§9).
+    """
+
+    __tablename__ = "banned_images"
+
+    image_ref: Mapped[str] = mapped_column(Text, primary_key=True)
+    banned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
 class Feedback(Base):
     """The training signal — one row per approve/reject decision."""
 

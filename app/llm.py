@@ -117,12 +117,11 @@ async def caption_image(brand: str, image_path: Path, settings: Settings) -> Pos
             ],
         },
     ]
-    # GPT-5.x / o-series reject the legacy max_tokens and want max_completion_tokens;
-    # everything else (incl. Claude) uses max_tokens. Keeps the cost cap on every model.
-    model = settings.default_llm_model
+    # OpenAI models (GPT-5+/GPT-6/o-series) reject the legacy max_tokens and want
+    # max_completion_tokens; everything else (incl. Claude) uses max_tokens.
     token_cap = (
         {"max_completion_tokens": settings.llm_max_tokens}
-        if model.startswith(("openai/gpt-5", "openai/o1", "openai/o3", "openai/o4"))
+        if settings.default_llm_model.startswith("openai/")
         else {"max_tokens": settings.llm_max_tokens}
     )
     response = await litellm.acompletion(
@@ -140,7 +139,12 @@ async def caption_image(brand: str, image_path: Path, settings: Settings) -> Pos
     try:
         data = json.loads(content)
         data = _unwrap_json_envelope(data)
-        return PostSuggestion.model_validate(data)
+        sug = PostSuggestion.model_validate(data)
     except (json.JSONDecodeError, ValidationError) as exc:
         logger.error("LLM returned invalid response for %s: %.200s", image_path.name, content)
         raise CaptionError(str(exc)) from exc
+    usage = getattr(response, "usage", None)
+    if usage is not None:  # for the eval's cost column; never stored on the post
+        sug.tokens_in = getattr(usage, "prompt_tokens", None)
+        sug.tokens_out = getattr(usage, "completion_tokens", None)
+    return sug
