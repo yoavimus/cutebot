@@ -188,9 +188,9 @@ Carousel/multi-image graduated to **M9** below.
 ## Post-v1 (decided 2026-07-08 — see `docs/POST_V1_REVIEW.md` for the reasoning)
 
 Standing task (not a milestone): **model eval** — `scripts/eval_models.py` bake-off,
-native Hebrew review by the owner. Round 1 (2026-10, Sonnet 4.6 / Opus 4.8 / GPT-5.1)
-→ **GPT-5.1** is the runtime default. Round 2: Claude Sonnet 5.5 / Opus 5.5 / GPT-6 Sol
-/ GPT-6 Luna, with a cost-per-post column. Re-run after each provider release.
+native Hebrew review by the owner. Rounds 1–3 (2026-10-05/06) → **Claude Opus 5.5** is
+the runtime default (DEV_GUIDELINES "Model decision" has the history). Candidates take
+`@effort`; cost per post is in the header. Re-run after each provider release.
 
 Owner review 2026-10-05: `docs/issues/cutebot_issues_05_10_2026.md` + findings (items
 1–9). Shipped the same day: Telegram command menu + `/help`, `/stock` + "🚫 Ban image"

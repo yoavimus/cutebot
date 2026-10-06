@@ -31,7 +31,7 @@ from app.brand import load_brand
 from app.config import get_settings
 
 # Round 2 (2026-10): current Anthropic + OpenAI lineups (adjust freely via --models).
-# Round 1 (sonnet-4-6 / opus-4-8 / gpt-5.1) picked gpt-5.1 — the runtime default.
+# Rounds 1-3 (2026-10) picked claude-opus-5-5 — the runtime default.
 DEFAULT_MODELS = [
     "anthropic/claude-sonnet-5-5",
     "anthropic/claude-opus-5-5",

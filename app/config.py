@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./cutebot.db"
 
     # AI — single agent via LiteLLM (model chosen by the eval; DEV_GUIDELINES)
-    default_llm_model: str = "openai/gpt-5.1"
+    default_llm_model: str = "anthropic/claude-opus-5-5"
     # Reasoning effort for OpenAI reasoning models (none/low/medium/high/xhigh/max);
     # empty = provider default. Ignored for Anthropic (LiteLLM maps it to a thinking
     # budget, which Claude 5.5+ rejects).

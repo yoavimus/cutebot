@@ -31,7 +31,7 @@ future suggestions.
 - **Backend / pipeline**: Python 3.12 · FastAPI · async SQLAlchemy
 - **Scheduler**: APScheduler (in-process; no Redis/worker)
 - **AI**: a single LiteLLM agent returning structured posts; model chosen by a
-  native-Hebrew eval (`DEFAULT_LLM_MODEL=openai/gpt-5.1`) — one-env-var switch to any
+  native-Hebrew eval (`DEFAULT_LLM_MODEL=anthropic/claude-opus-5-5`) — one-env-var switch to any
   provider
 - **Review channel**: Telegram bot (inline buttons); notifier interface is
   platform-agnostic so Discord/Slack can be added as adapters
