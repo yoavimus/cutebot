@@ -41,7 +41,7 @@ double-post. Only `ok` → `published`; failure → `failed` (re-queueable later
 
 ## AI / Claude usage
 
-- Runtime model: via LiteLLM (`DEFAULT_LLM_MODEL`, default `openai/gpt-5.1` — see
+- Runtime model: via LiteLLM (`DEFAULT_LLM_MODEL`, default `anthropic/claude-opus-5-5` — see
   "Model decision" below). For LLM/API questions, read the `claude-api` skill — don't
   answer model questions from memory.
 - Keep prompts in `app/llm.py` (or a `prompts/` dir if they grow). Brand guidelines
@@ -67,17 +67,20 @@ punctuation mis-placed.
 3. If Sonnet fails after prompt tuning → try `anthropic/claude-opus-4-8` and record the
    cost/quality trade-off here before changing the default.
 
-**Model decision — process decided 2026-07-08; round 1 decided 2026-10-05.**
+**Model decision — process decided 2026-07-08; current pick 2026-10-06: Claude Opus 5.5.**
 The choice is made empirically with `scripts/eval_models.py`: same stock images × same
 brand file across same-tier candidates from different providers, output reviewed
-side-by-side by the owner (native Hebrew speaker). **Round 1** (Claude Sonnet 4.6 /
-Claude Opus 4.8 / GPT-5.1, 10 images): **GPT-5.1 won on Hebrew quality** → runtime
-default is `openai/gpt-5.1` (PRODUCT_SPEC §3, CLAUDE.md, `app/config.py`, `env.example`
-updated together — a silent switch is a spec deviation). Caveat: the Claude candidates
-were already a generation behind at review time. **Round 2** (standing): Claude Sonnet
-5.5 / Opus 5.5 / GPT-6 Sol / GPT-6 Luna with the new cost-per-post column; re-run after
-each provider release and record the outcome here. (Background:
-docs/POST_V1_REVIEW.md §3.1; owner notes docs/issues/cutebot_issues_05_10_2026_findings.md §6.)
+side-by-side by the owner (native Hebrew speaker). History:
+- **Round 1** (2026-10-05; Claude Sonnet 4.6 / Opus 4.8 / GPT-5.1): GPT-5.1 won — but
+  the Claude candidates were a generation behind at review time.
+- **Round 2–3** (2026-10-05/06; Sonnet 5.5 / Opus 5.5 / GPT-6.1 Sol @medium and @xhigh;
+  Astra and Fable excluded on cost, ~$0.05–0.10/post): **Opus 5.5 won on Hebrew quality**
+  at ~$0.057/post → runtime default is `anthropic/claude-opus-5-5` (PRODUCT_SPEC §3,
+  CLAUDE.md, `app/config.py`, `env.example` updated together — a silent switch is a spec
+  deviation). Sonnet 5.5 (~$0.028) is the cost fallback.
+Standing: re-run after each provider release (candidates take `@effort`), record here.
+(Background: docs/POST_V1_REVIEW.md §3.1; owner notes
+docs/issues/cutebot_issues_05_10_2026_findings.md §6.)
 
 ## RPER
 

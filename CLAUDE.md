@@ -16,8 +16,8 @@ review channels, real publishers, analytics, multi-tenant.
 ## AI / model strategy (runtime)
 
 - The pipeline's **runtime** LLM goes through **LiteLLM**, set by `DEFAULT_LLM_MODEL`
-  (default `openai/gpt-5.1` — won the 2026-10 native-Hebrew eval round 1 over Claude
-  Sonnet 4.6 / Opus 4.8; see DEV_GUIDELINES "Model decision"). One-env-var provider
+  (default `anthropic/claude-opus-5-5` — won the 2026-10 native-Hebrew eval over Sonnet
+  5.5 and GPT-6.1 Sol; see DEV_GUIDELINES "Model decision"). One-env-var provider
   switch; the choice is re-evaluated with `scripts/eval_models.py` after each provider
   release.
 - All model calls go through `app/llm.py` — never call LiteLLM/provider SDKs directly

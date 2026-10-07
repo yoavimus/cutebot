@@ -188,23 +188,19 @@ Carousel/multi-image graduated to **M9** below.
 ## Post-v1 (decided 2026-07-08 — see `docs/POST_V1_REVIEW.md` for the reasoning)
 
 Standing task (not a milestone): **model eval** — `scripts/eval_models.py` bake-off,
-native Hebrew review by the owner. Round 1 (2026-10, Sonnet 4.6 / Opus 4.8 / GPT-5.1)
-→ **GPT-5.1** is the runtime default. Round 2: Claude Sonnet 5.5 / Opus 5.5 / GPT-6 Sol
-/ GPT-6 Luna, with a cost-per-post column. Re-run after each provider release.
+native Hebrew review by the owner. Rounds 1–3 (2026-10-05/06) → **Claude Opus 5.5** is
+the runtime default (DEV_GUIDELINES "Model decision" has the history). Candidates take
+`@effort`; cost per post is in the header. Re-run after each provider release.
 
 Owner review 2026-10-05: `docs/issues/cutebot_issues_05_10_2026.md` + findings (items
 1–9). Shipped the same day: Telegram command menu + `/help`, `/stock` + "🚫 Ban image"
 reject chip, no stock recycling, eval cost column.
 
-1. **M8 — learning loop v1** (spec A; medium): few-shot from accumulated approvals +
-   reject-reason conditioning; recent-post memory ("don't repeat these"); measured
-   with the eval harness. **Brand distillation** (strong model proposes `brand.md`
-   diffs from feedback, owner approves in Telegram) lands here or M9.
-   **Includes C — "✏️ Fix" button** (approve with a wording/spelling edit): stateless
-   via Telegram `ForceReply` carrying `#<post id>`, reply replaces `caption_he` (`en:`
-   prefix for English), status → approved, `Feedback` keeps original → edited — the
-   strongest few-shot signal M8 has. Skip diff view / partial edits until the edit log
-   shows a need.
+1. **M8 — learning loop v1** — **in progress (approved 2026-10-07)**: plan
+   `docs/plans/M8_PLAN.md`, epic CUT-63, tickets CUT-64…67. Few-shot from the owner's
+   approved posts + reject-reason hints + recent-post memory (CUT-64), ✏️ Fix button
+   with edit deltas (CUT-65), `--learning` A/B on the eval harness + close-out (CUT-66),
+   `/distill` brand distillation as a stretch (CUT-67 → M10 if it doesn't fit).
 2. **M9 — Carousel posts** (graduated from backlog 2026-10-05):
    - Storage: JSON list column `image_refs` on `Post` (one migration; `image_ref`
      stays as the cover). A join table only when slides need per-slide captions.

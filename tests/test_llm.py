@@ -22,3 +22,11 @@ def test_does_not_unwrap_when_json_is_not_a_dict() -> None:
 def test_does_not_unwrap_when_other_keys_present() -> None:
     d = {"json": _FLAT, "extra": 1}
     assert _unwrap_json_envelope(d) == d  # a real field literally named "json" stays put
+
+
+def test_strip_fences() -> None:
+    from app.llm import _strip_fences
+
+    assert _strip_fences('```json\n{"a": 1}\n```') == '{"a": 1}'
+    assert _strip_fences('```\n{"a": 1}```') == '{"a": 1}'
+    assert _strip_fences(' {"a": 1} ') == '{"a": 1}'

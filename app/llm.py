@@ -78,6 +78,15 @@ def _has_provider_key(s: Settings) -> bool:
     return True
 
 
+def _strip_fences(text: str) -> str:
+    """A fenced code block (```json ... ```) → the inner JSON; anything else passes through."""
+    t = text.strip()
+    if t.startswith("```"):
+        t = t.split("\n", 1)[1] if "\n" in t else ""
+        t = t.rsplit("```", 1)[0]
+    return t.strip()
+
+
 def _unwrap_json_envelope(data: object) -> object:
     """Some models (seen with Opus under response_format=json_object) wrap the object
     in a single-key ``{"json": {...}}`` envelope. Unwrap it so validation sees the
@@ -119,23 +128,37 @@ async def caption_image(brand: str, image_path: Path, settings: Settings) -> Pos
     ]
     # OpenAI models (GPT-5+/GPT-6/o-series) reject the legacy max_tokens and want
     # max_completion_tokens; everything else (incl. Claude) uses max_tokens.
-    token_cap = (
-        {"max_completion_tokens": settings.llm_max_tokens}
-        if settings.default_llm_model.startswith("openai/")
-        else {"max_tokens": settings.llm_max_tokens}
+    is_openai = settings.default_llm_model.startswith("openai/")
+    effort = settings.llm_reasoning_effort if is_openai else ""
+    cap = settings.llm_max_tokens
+    if effort and effort != "none":
+        # reasoning tokens count against the completion cap — a tight cap returns
+        # empty content instead of a caption.
+        cap = max(cap, 8000)
+    token_cap = {"max_completion_tokens": cap} if is_openai else {"max_tokens": cap}
+    extra = {"reasoning_effort": effort} if effort else {}
+    # LiteLLM implements json_object for Anthropic by forcing a tool call, which
+    # Claude 5.5+ rejects (400 "tool_choice: type any not supported"). The prompt
+    # already demands bare JSON, so Claude gets no response_format; fences are
+    # stripped below just in case.
+    fmt = (
+        {}
+        if settings.default_llm_model.startswith("anthropic/")
+        else {"response_format": {"type": "json_object"}}
     )
     response = await litellm.acompletion(
         model=settings.default_llm_model,
         messages=messages,
-        response_format={"type": "json_object"},
+        **fmt,
         **token_cap,
+        **extra,
         timeout=settings.llm_timeout_s,
         num_retries=settings.llm_num_retries,
         # LiteLLM only reads keys from os.environ; pass explicitly since pydantic-settings
         # loads them into Settings, not the environment.
         api_key=_provider_key(settings),
     )
-    content = response["choices"][0]["message"]["content"]
+    content = _strip_fences(response["choices"][0]["message"]["content"])
     try:
         data = json.loads(content)
         data = _unwrap_json_envelope(data)

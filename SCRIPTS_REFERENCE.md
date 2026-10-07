@@ -99,10 +99,11 @@ by approved/published posts are never recycled; a short batch DMs a low-stock wa
 ```bash
 # Same images + brand file across candidate models, side-by-side Markdown for review.
 # Keys come from .env; a candidate without its provider key yields the offline stub.
-# Each model header shows elapsed time + cost of that post (usage x list prices in
-# PRICES); the file header totals cost per model. Output lands in eval/ (gitignored).
+# Candidates are <litellm id>[@<reasoning effort>] (effort applies to OpenAI models).
+# Each model header shows elapsed time + cost of that post (usage x LiteLLM's price
+# table); the file header totals cost per candidate. Output lands in eval/ (gitignored).
 python -m scripts.eval_models                          # default candidate list
-python -m scripts.eval_models --models anthropic/claude-sonnet-5-5,openai/gpt-6-sol
+python -m scripts.eval_models --models anthropic/claude-sonnet-5-5,openai/gpt-6.1-sol@high
 python -m scripts.eval_models --images 5 --out eval/eval_results.md
 
 # Render the results as a side-by-side HTML page (local, no upload; images load from
@@ -116,7 +117,7 @@ python -m scripts.eval_to_html --embed --out eval/eval_comparison_shareable.html
 Standing task — re-run after each provider release, review natively, record the
 decision in `DEV_GUIDELINES.md` ("Model decision"); if the winner changes, update
 `PRODUCT_SPEC.md` §3 + `CLAUDE.md` + `env.example` + the config default together.
-When a new model id appears, add its list price to `PRICES` in `scripts/eval_models.py`.
+A model id LiteLLM doesn't price yet shows `cost ?` — bump `litellm` in requirements.txt.
 
 ## Quality gates
 

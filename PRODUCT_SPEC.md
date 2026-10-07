@@ -70,7 +70,7 @@ external worker in v1 — the scheduler runs in the app process.
 
 ### Key design decisions
 - **Single LLM agent, provider-agnostic.** All model calls go through `app/llm.py`,
-  which wraps LiteLLM. Model is set by `DEFAULT_LLM_MODEL` (default `openai/gpt-5.1`,
+  which wraps LiteLLM. Model is set by `DEFAULT_LLM_MODEL` (default `anthropic/claude-opus-5-5`,
   chosen by the native-Hebrew eval — DEV_GUIDELINES "Model decision"). Switching
   providers is a one-env-var change.
 - **Notifier is an interface.** `app/notifier/base.py` defines `Notifier`; Telegram is

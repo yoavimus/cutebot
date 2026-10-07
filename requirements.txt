@@ -14,7 +14,7 @@ pydantic-settings==2.7.0
 python-dotenv==1.0.1
 
 # AI — single agent via LiteLLM (Claude by default)
-litellm==1.57.3
+litellm==1.104.0
 
 # Scheduler (in-process; no Redis/worker in v1)
 apscheduler==3.11.0
