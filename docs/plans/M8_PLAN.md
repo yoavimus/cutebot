@@ -1,7 +1,8 @@
 # M8 — Learning loop v1
 
-> Draft 2026-10-06 — **not yet approved; no tickets created.** Review by adding
-> `**feedback**` lines under any paragraph, then say "see my notes".
+> **Approved 2026-10-07.** Epic **CUT-63**; tickets **CUT-64** (M8.1), **CUT-65** (M8.2),
+> **CUT-66** (M8.3), **CUT-67** (M8.4, stretch). This file is canonical for scope; the
+> tickets carry the deliverable checklists.
 
 ## Context
 
@@ -26,15 +27,15 @@ owner's own approved posts), so it survives model switches.
   The pipeline builds it; the eval script can pass it or not — that's the A/B.
 - **Edits are the strongest signal**, so the ✏️ Fix button (spec item C) ships *in* M8,
   not after it — otherwise the loop learns from approvals only.
-- **Brand distillation** (`/distill` → proposed `brand.md` diff) is M8.5, a stretch:
-  built only if M8.1–M8.4 land; otherwise it moves to M10. Carousel (M9) is not affected.
+- **Brand distillation** (`/distill` → proposed `brand.md` diff) is M8.4, a stretch:
+  built only if M8.1–M8.3 land; otherwise it moves to M10. Carousel (M9) is not affected.
 - **Graceful cold start.** With zero approved posts the context block is omitted
   entirely and generation behaves exactly as today. Nothing in M8 can make a batch worse
   than M7's.
 
 ## Approach
 
-### M8.1 — Learning context + few-shot examples — `app/learning.py` (new), `app/llm.py`
+### M8.1 — Learning context: few-shot + reject hints + recent memory — `app/learning.py` (new), `app/llm.py` (CUT-64)
 
 - `LearningContext` (pydantic): `examples: list[Example]` (`caption_he`, `caption_en`,
   `edited: bool`), `recent: list[str]`, `reject_hints: dict[str, int]`,
@@ -56,9 +57,7 @@ owner's own approved posts), so it survives model switches.
 - Tests: context from a seeded DB (edited-first ordering, zero-approved → empty block);
   prompt rendering asserts the block appears only with examples.
 
-### M8.2 — Reject-reason conditioning + recent-post memory — `app/learning.py`
-
-Same `build_context`, two more fields:
+Same `build_context`, two more fields (one ticket — same module, same seam):
 
 - **reject_hints** — count of reject reasons over the last `LEARNING_WINDOW_DAYS`
   (default 30), rendered as short directives only when non-zero:
@@ -74,7 +73,7 @@ Same `build_context`, two more fields:
 - Tests: hints only for reasons present in-window; recent capped at N; both omitted
   when empty.
 
-### M8.3 — ✏️ Fix button (approve with edits) — `app/notifier/telegram.py`, migration `0006`
+### M8.2 — ✏️ Fix button (approve with edits) — `app/notifier/telegram.py`, migration `0006` (CUT-65)
 
 - Review card gains a third button `✏️ Fix` (`fix:<post_id>`). Also offered on an
   already-approved card (edit while queued).
@@ -96,7 +95,7 @@ Same `build_context`, two more fields:
 - Tests: he/en routing, suggested→approved with Feedback delta, approved stays queued,
   published refused, non-owner ignored.
 
-### M8.4 — Measure it — `scripts/eval_models.py`
+### M8.3 — Measure it + close out — `scripts/eval_models.py` (CUT-66)
 
 - `--learning` flag: build the real `LearningContext` from the configured DB
   (`DATABASE_URL`, i.e. a prod snapshot or the local DB) and pass it to every candidate;
@@ -107,10 +106,12 @@ Same `build_context`, two more fields:
   rounds 1–3 (~$0.60 per 10-image pair on Opus).
 - Also add the learning counts to `/status` (`learning: 7 examples · 3 edits · 12
   recent`) so it's visible that the loop is feeding.
+- Milestone close-out lives here too: ROADMAP ticked, SCRIPTS_REFERENCE, PRODUCT_SPEC §8
+  A/C marked shipped, this plan archived to `docs/archive/M8_PLAN.md`.
 
-### M8.5 — Brand distillation (stretch) — `/distill`
+### M8.4 — Brand distillation (stretch) — `/distill` (CUT-67)
 
-Only if M8.1–M8.4 are done inside the milestone; otherwise → M10.
+Only if M8.1–M8.3 are done inside the milestone; otherwise → M10.
 
 - `/distill` (owner command): an Opus call reads `brand.md` + the last 30 days of
   Feedback (reasons, edits, approved captions) and returns a **proposed unified diff** to
@@ -122,15 +123,14 @@ Only if M8.1–M8.4 are done inside the milestone; otherwise → M10.
 
 ## Order and sizing
 
-| # | Item | Size | Depends on |
-|---|---|---|---|
-| M8.1 | Learning context + few-shot | small–medium | — |
-| M8.2 | Reject hints + recent memory | small | M8.1 |
-| M8.3 | ✏️ Fix button + edit columns | medium | — (parallel with M8.1) |
-| M8.4 | `--learning` A/B + `/status` line | small | M8.1–M8.3 |
-| M8.5 | `/distill` (stretch) | medium | M8.4 |
+| # | Ticket | Item | Size | Depends on |
+|---|---|---|---|---|
+| M8.1 | CUT-64 | Learning context: few-shot + hints + memory | medium | — |
+| M8.2 | CUT-65 | ✏️ Fix button + edit columns | medium | — (parallel with M8.1) |
+| M8.3 | CUT-66 | `--learning` A/B + `/status` line + close-out | small | M8.1–M8.2 |
+| M8.4 | CUT-67 | `/distill` (stretch) | medium | M8.3 |
 
-M8.1 and M8.3 can run in parallel (different files). Rough total: 2–3 sessions.
+M8.1 and M8.2 can run in parallel (different files). Rough total: 2–3 sessions.
 
 ## Out of scope
 

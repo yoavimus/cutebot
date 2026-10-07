@@ -196,15 +196,11 @@ Owner review 2026-10-05: `docs/issues/cutebot_issues_05_10_2026.md` + findings (
 1–9). Shipped the same day: Telegram command menu + `/help`, `/stock` + "🚫 Ban image"
 reject chip, no stock recycling, eval cost column.
 
-1. **M8 — learning loop v1** (spec A; medium): few-shot from accumulated approvals +
-   reject-reason conditioning; recent-post memory ("don't repeat these"); measured
-   with the eval harness. **Brand distillation** (strong model proposes `brand.md`
-   diffs from feedback, owner approves in Telegram) lands here or M9.
-   **Includes C — "✏️ Fix" button** (approve with a wording/spelling edit): stateless
-   via Telegram `ForceReply` carrying `#<post id>`, reply replaces `caption_he` (`en:`
-   prefix for English), status → approved, `Feedback` keeps original → edited — the
-   strongest few-shot signal M8 has. Skip diff view / partial edits until the edit log
-   shows a need.
+1. **M8 — learning loop v1** — **in progress (approved 2026-10-07)**: plan
+   `docs/plans/M8_PLAN.md`, epic CUT-63, tickets CUT-64…67. Few-shot from the owner's
+   approved posts + reject-reason hints + recent-post memory (CUT-64), ✏️ Fix button
+   with edit deltas (CUT-65), `--learning` A/B on the eval harness + close-out (CUT-66),
+   `/distill` brand distillation as a stretch (CUT-67 → M10 if it doesn't fit).
 2. **M9 — Carousel posts** (graduated from backlog 2026-10-05):
    - Storage: JSON list column `image_refs` on `Post` (one migration; `image_ref`
      stays as the cover). A join table only when slides need per-slide captions.
