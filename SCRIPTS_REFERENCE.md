@@ -83,6 +83,7 @@ python -m app.notifier.telegram delete-webhook
 /pending         re-DM undecided suggestions (lost-DM recovery)
 /requeue <id>    move a FAILED post back into the queue
 /stock           unused / used / banned counts + banned list; /stock unban <file>
+/distill         propose a brand.md revision from recent feedback (✅ Apply / ❌ Discard)
 /help            this list (also /start)
 (photo DM)       save the photo into the stock library
 ```
@@ -101,6 +102,12 @@ re-renders the card as `✅ Approved (edited)`, and writes a `Feedback` row with
 `edit_lang`/`edit_before`/`edit_after` — the strongest learning signal, fed back into
 generation by `app/learning.py`. Published/rejected posts refuse edits. No pending-edit
 state: the post id travels in the prompt text.
+
+**/distill** (M8.4, on demand only): one LLM call reads `brand.md` + the learning context
+(approved posts, edits, reject reasons) and DMs a unified diff + rationale. Nothing is
+written until ✅ Apply (owner-only), which first copies the file to `brand.md.bak`.
+Proposals live in memory — after a restart the buttons answer "expired, run /distill
+again"; Apply also refuses if `brand.md` changed since the proposal.
 
 ## Model eval (Hebrew quality bake-off)
 

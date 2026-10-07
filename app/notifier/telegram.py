@@ -5,6 +5,7 @@ Callback data:
   ``reject:<post_id>``             → show reason-picker chips
   ``reason:<post_id>:<reason>``    → reject with the given reason (or "skip");
                                      ``ban_image`` also bans the photo from future batches
+  ``distill:apply|discard:<token>`` → owner's answer to a /distill brand.md proposal
   ``fix:<post_id>``                → ForceReply prompt; the owner's reply (``#<id>`` in the
                                      prompt text — stateless) replaces the caption and approves
 
@@ -28,7 +29,7 @@ import httpx
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import learning, stock
+from app import distill, learning, stock
 from app.config import Settings, get_settings
 from app.models import BannedImage, Post, PostStatus
 from app.pipeline.review import apply_edit, handle_decision
@@ -68,6 +69,7 @@ _COMMAND_HELP: list[tuple[str, str]] = [
     ("postnow", "publish next in queue, or /postnow <id>"),
     ("requeue", "put a failed post back: /requeue <id>"),
     ("stock", "stock library counts; /stock unban <file>"),
+    ("distill", "propose a brand.md revision from recent feedback"),
     ("help", "this list"),
 ]
 
@@ -219,6 +221,42 @@ class TelegramNotifier:
                 },
             )
 
+    async def send_distill(self, proposal: distill.Proposal) -> None:
+        """DM a brand.md proposal with ✅ Apply / ❌ Discard."""
+        diff = proposal.diff
+        if len(diff) > _DISTILL_DIFF_LIMIT:
+            diff = diff[:_DISTILL_DIFF_LIMIT] + "\n… (diff truncated; Apply writes the full file)"
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "✅ Apply", "callback_data": f"distill:apply:{proposal.token}"},
+                    {"text": "❌ Discard", "callback_data": f"distill:discard:{proposal.token}"},
+                ]
+            ]
+        }
+        async with httpx.AsyncClient(timeout=15) as client:
+            await client.post(
+                self._url("sendMessage"),
+                json={
+                    "chat_id": self._settings.telegram_chat_id,
+                    "text": f"{proposal.rationale}\n\n{diff}",
+                    "reply_markup": keyboard,
+                },
+            )
+
+    async def mark_distilled(self, cb_message: dict, label: str) -> None:
+        """Replace the proposal's buttons with the outcome."""
+        async with httpx.AsyncClient(timeout=15) as client:
+            await client.post(
+                self._url("editMessageText"),
+                json={
+                    "chat_id": cb_message["chat"]["id"],
+                    "message_id": cb_message["message_id"],
+                    "text": f"{cb_message.get('text', '')}\n\n{label}",
+                    "reply_markup": {"inline_keyboard": []},
+                },
+            )
+
     async def show_edited(self, chat_id: int, card_id: int, post: Post) -> None:
         """Re-render the review card with the final caption + ``✅ Approved (edited)``."""
         body = f"{render_full_caption(post, self._settings)}\n\n✅ Approved (edited)"
@@ -294,6 +332,7 @@ class TelegramNotifier:
             logger.warning("show_reason_picker failed: message=%s error=%s", message_id, exc)
 
 
+_DISTILL_DIFF_LIMIT = 3000  # keeps rationale + diff inside Telegram's 4096-char message cap
 _EDITABLE = (PostStatus.SUGGESTED, PostStatus.APPROVED)
 _TERMINAL_CB = {PostStatus.PUBLISHING, PostStatus.PUBLISHED, PostStatus.FAILED}
 
@@ -466,6 +505,22 @@ async def _cmd_pending(
     await _rev.send_for_review(list(posts), notifier)
 
 
+async def _cmd_distill(
+    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+) -> None:
+    from app.llm import CaptionError
+
+    try:
+        result = await distill.propose(session, settings)
+    except CaptionError as exc:
+        await notifier.send_message(f"Distill failed: {exc}")
+        return
+    if isinstance(result, str):
+        await notifier.send_message(result)
+    else:
+        await notifier.send_distill(result)
+
+
 _COMMANDS: dict[str, Any] = {
     "/status": _cmd_status,
     "/generate": _cmd_generate,
@@ -474,6 +529,7 @@ _COMMANDS: dict[str, Any] = {
     "/requeue": _cmd_requeue,
     "/pending": _cmd_pending,
     "/stock": _cmd_stock,
+    "/distill": _cmd_distill,
     "/help": _cmd_help,
     "/start": _cmd_help,
 }
@@ -568,9 +624,32 @@ async def process_message(
 # ─────────────────────────────── callback handler ────────────────────────────
 
 
-async def process_callback(session: AsyncSession, notifier: TelegramNotifier, cb: dict) -> None:
+async def process_callback(
+    session: AsyncSession,
+    notifier: TelegramNotifier,
+    cb: dict,
+    settings: Settings | None = None,
+) -> None:
     """Parse a Telegram callback query and route to approve or two-step reject."""
     data = cb.get("data", "")
+
+    # ── /distill proposal: the only callback that writes a file, so owner-gated ──
+    if data.startswith("distill:"):
+        settings = settings or get_settings()
+        _, _, rest = data.partition(":")
+        action, _, token = rest.partition(":")
+        if str(cb["message"]["chat"]["id"]) != str(settings.telegram_chat_id):
+            logger.warning("Ignoring distill callback from non-owner chat.")
+            return
+        if action == "apply":
+            label = distill.apply(token, settings)
+        elif action == "discard":
+            label = distill.discard(token)
+        else:
+            return
+        await notifier.mark_distilled(cb["message"], label)
+        await notifier.answer_callback(cb["id"], label)
+        return
 
     # ── Step 1: ❌ tap → show reason picker ──────────────────────────────────
     if data.startswith("reject:"):

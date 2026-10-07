@@ -202,7 +202,7 @@ reject chip, no stock recycling, eval cost column.
    - [x] **M8.2** (CUT-65) — ✏️ Fix button + migration `0006`.
    - [x] **M8.3** (CUT-66) — `--learning` eval flag + `/status` line; the paid A/B page
      is owner-run (`--learning` against a prod snapshot).
-   - [ ] **M8.4** (CUT-67) — `/distill` stretch.
+   - [x] **M8.4** (CUT-67) — `/distill` brand distillation (`app/distill.py`).
 2. **M9 — Carousel posts** (graduated from backlog 2026-10-05):
    - Storage: JSON list column `image_refs` on `Post` (one migration; `image_ref`
      stays as the cover). A join table only when slides need per-slide captions.
