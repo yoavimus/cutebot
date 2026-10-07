@@ -203,10 +203,6 @@ reject chip, no stock recycling, eval cost column.
    - [x] **M8.3** (CUT-66) — `--learning` eval flag + `/status` line; the paid A/B page
      is owner-run (`--learning` against a prod snapshot).
    - [ ] **M8.4** (CUT-67) — `/distill` stretch.
-   Few-shot from the owner's
-   approved posts + reject-reason hints + recent-post memory (CUT-64), ✏️ Fix button
-   with edit deltas (CUT-65), `--learning` A/B on the eval harness + close-out (CUT-66),
-   `/distill` brand distillation as a stretch (CUT-67 → M10 if it doesn't fit).
 2. **M9 — Carousel posts** (graduated from backlog 2026-10-05):
    - Storage: JSON list column `image_refs` on `Post` (one migration; `image_ref`
      stays as the cover). A join table only when slides need per-slide captions.
