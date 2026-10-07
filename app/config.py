@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     # LLM reliability (passed to LiteLLM; see app/llm.py)
     llm_timeout_s: int = 60
     llm_num_retries: int = 2
-    llm_max_tokens: int = 2000
+    llm_max_tokens: int = 4000
 
     # Telegram review channel
     telegram_bot_token: str = ""

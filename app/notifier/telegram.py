@@ -571,8 +571,9 @@ async def _maybe_apply_edit(
 ) -> bool:
     """If ``msg`` replies to our ✏️ Fix prompt, apply the edit. Returns True when handled."""
     prompt = msg.get("reply_to_message") or {}
-    ref = _EDIT_REF.search(prompt.get("text") or "")
-    if not (prompt.get("from", {}).get("is_bot") and _EDIT_MARKER in prompt["text"] and ref):
+    prompt_text = prompt.get("text") or ""  # a reply to a photo card has no "text" at all
+    ref = _EDIT_REF.search(prompt_text)
+    if not (prompt.get("from", {}).get("is_bot") and _EDIT_MARKER in prompt_text and ref):
         return False
     post_id, card_id = int(ref[1]), int(ref[2])
     lang = "he"

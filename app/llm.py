@@ -112,8 +112,14 @@ def _stub_suggestion(image_path: Path) -> PostSuggestion:
     )
 
 
-async def _complete(messages: list[dict[str, Any]], settings: Settings) -> Any:
-    """One LiteLLM completion with the provider quirks applied (token cap, effort, JSON mode)."""
+async def _complete(
+    messages: list[dict[str, Any]], settings: Settings, min_tokens: int = 0
+) -> Any:
+    """One LiteLLM completion with the provider quirks applied (token cap, effort, JSON mode).
+
+    ``min_tokens`` raises the output cap for calls whose answer is known to be long (the
+    distillation returns a whole brand file).
+    """
     # Imported lazily so the package imports cleanly without litellm installed in
     # minimal environments, and so the offline path never touches the network.
     import litellm
@@ -122,7 +128,7 @@ async def _complete(messages: list[dict[str, Any]], settings: Settings) -> Any:
     # max_completion_tokens; everything else (incl. Claude) uses max_tokens.
     is_openai = settings.default_llm_model.startswith("openai/")
     effort = settings.llm_reasoning_effort if is_openai else ""
-    cap = settings.llm_max_tokens
+    cap = max(settings.llm_max_tokens, min_tokens)
     if effort and effort != "none":
         # reasoning tokens count against the completion cap — a tight cap returns
         # empty content instead of a caption.
@@ -226,6 +232,8 @@ async def distill_brand(brand: str, evidence: str, settings: Settings) -> BrandP
             {"role": "user", "content": _DISTILL_PROMPT.format(brand=brand, evidence=evidence)},
         ],
         settings,
+        # the answer embeds the complete revised brand.md (~10 KB of Hebrew) plus thinking
+        min_tokens=16000,
     )
     content = _strip_fences(response["choices"][0]["message"]["content"])
     try:

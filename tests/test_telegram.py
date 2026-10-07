@@ -494,3 +494,15 @@ async def test_status_shows_learning_counts(session: AsyncSession) -> None:
     notifier = _FakeNotifier()
     await process_message(session, notifier, _msg(_OWNER_ID, "/status"), _OWNER_SETTINGS)
     assert "learning: 1 examples · 1 edits · 0 recent · 0 reject hints" in notifier.messages[0]
+
+
+async def test_reply_to_photo_card_is_not_an_edit(session: AsyncSession) -> None:
+    """Replying to the bot's photo card (no "text" key) must not crash the dispatcher."""
+    notifier = _FakeNotifier()
+    msg = {
+        "chat": {"id": _OWNER_ID},
+        "text": "nice one",
+        "reply_to_message": {"from": {"is_bot": True}, "photo": [{"file_id": "x"}]},
+    }
+    await process_message(session, notifier, msg, _OWNER_SETTINGS)
+    assert notifier.messages == []
