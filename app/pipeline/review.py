@@ -32,7 +32,11 @@ _TERMINAL = {PostStatus.PUBLISHING, PostStatus.PUBLISHED, PostStatus.FAILED}
 
 
 async def handle_decision(
-    session: AsyncSession, post_id: int, decision: str, reason: str | None = None
+    session: AsyncSession,
+    post_id: int,
+    decision: str,
+    reason: str | None = None,
+    edit: tuple[str, str, str] | None = None,
 ) -> Post | None:
     """Apply an approve/reject decision, allowing reversals on pre-publish posts.
 
@@ -41,7 +45,8 @@ async def handle_decision(
     - REJECTED → can be flipped to APPROVED (re-enqueues).
     - Same decision repeated → no-op (idempotent).
     - PUBLISHING/PUBLISHED/FAILED → never mutated (approval gate is load-bearing).
-    Every real transition writes a Feedback row.
+    Every real transition writes a Feedback row (``edit`` = (lang, before, after) when
+    the owner corrected a caption on the way — see ``apply_edit``).
     """
     post = await session.get(Post, post_id)
     if post is None:
@@ -61,7 +66,7 @@ async def handle_decision(
         logger.info("Post %s already %s — no-op.", post_id, post.status)
         return post
 
-    session.add(Feedback(post_id=post.id, decision=dec, reason=reason))
+    session.add(Feedback(post_id=post.id, decision=dec, reason=reason, **_edit_cols(edit)))
     post.decided_at = datetime.now(UTC)
 
     if dec is Decision.APPROVE:
@@ -73,4 +78,36 @@ async def handle_decision(
     await session.commit()
     await session.refresh(post)
     logger.info("Post %s -> %s.", post_id, post.status)
+    return post
+
+
+def _edit_cols(edit: tuple[str, str, str] | None) -> dict[str, str]:
+    if edit is None:
+        return {}
+    lang, before, after = edit
+    return {"edit_lang": lang, "edit_before": before, "edit_after": after}
+
+
+async def apply_edit(session: AsyncSession, post_id: int, lang: str, text: str) -> Post | None:
+    """✏️ Fix: replace the ``he``/``en`` caption and approve (M8.2).
+
+    - SUGGESTED → caption replaced, then approved via ``handle_decision`` (the one gate).
+    - APPROVED → caption replaced, queue position untouched; a Feedback row records the delta.
+    - Any other status (rejected/publishing/published/failed) → returned unchanged.
+    An unchanged caption is a no-op. The returned post's status tells the caller what happened.
+    """
+    post = await session.get(Post, post_id)
+    if post is None or post.status not in (PostStatus.SUGGESTED, PostStatus.APPROVED):
+        return post
+    field = "caption_he" if lang == "he" else "caption_en"
+    before = getattr(post, field)
+    if text == before:
+        return post
+    edit = (lang, before, text)
+    setattr(post, field, text)
+    if post.status == PostStatus.SUGGESTED:
+        return await handle_decision(session, post_id, "approve", edit=edit)
+    session.add(Feedback(post_id=post.id, decision=Decision.APPROVE, **_edit_cols(edit)))
+    await session.commit()
+    await session.refresh(post)
     return post

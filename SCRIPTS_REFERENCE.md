@@ -94,6 +94,14 @@ signal — plus **🚫 Ban image**, which also retires the photo from future bat
 (`banned_images` table; the file stays on disk so `/media` keeps serving). Images used
 by approved/published posts are never recycled; a short batch DMs a low-stock warning.
 
+**✏️ Fix** (M8.2) sits next to Approve/Reject (and on approved cards). Tap → the bot
+asks you to *reply* with the corrected Hebrew caption (prefix `en:` to fix the English
+instead). The reply approves a suggested post (an approved one keeps its queue spot),
+re-renders the card as `✅ Approved (edited)`, and writes a `Feedback` row with
+`edit_lang`/`edit_before`/`edit_after` — the strongest learning signal, fed back into
+generation by `app/learning.py`. Published/rejected posts refuse edits. No pending-edit
+state: the post id travels in the prompt text.
+
 ## Model eval (Hebrew quality bake-off)
 
 ```bash

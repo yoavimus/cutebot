@@ -5,11 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import llm, stock
 from app.config import Settings
-from app.models import BannedImage, Post, PostStatus
+from app.models import BannedImage, Feedback, Post, PostStatus
 from app.notifier.telegram import process_callback, process_message
 from app.pipeline import generate, review
 from app.schemas import PostSuggestion
@@ -22,6 +23,8 @@ class _FakeNotifier:
         self.messages: list[str] = []
         self.suggestions: list[Post] = []
         self.reason_pickers: list[tuple[dict, int]] = []
+        self.edit_prompts: list[tuple[dict, int]] = []
+        self.edited: list[tuple[int, int, Post]] = []
 
     async def send_suggestion(self, post: Post) -> None:
         self.suggestions.append(post)
@@ -37,6 +40,12 @@ class _FakeNotifier:
 
     async def show_reason_picker(self, cb_message: dict, post_id: int) -> None:
         self.reason_pickers.append((cb_message, post_id))
+
+    async def prompt_edit(self, cb_message: dict, post_id: int) -> None:
+        self.edit_prompts.append((cb_message, post_id))
+
+    async def show_edited(self, chat_id: int, card_id: int, post: Post) -> None:
+        self.edited.append((chat_id, card_id, post))
 
 
 def _photo_cb(post_id: int, decision: str) -> dict:
@@ -361,3 +370,119 @@ async def test_cmd_pending_resends(session: AsyncSession) -> None:
     await process_message(session, notifier, _msg(_OWNER_ID, "/pending"), _OWNER_SETTINGS)
     assert "2 pending" in notifier.messages[0]
     assert len(notifier.suggestions) == len(posts)
+
+
+# ── ✏️ Fix (M8.2) ────────────────────────────────────────────────────────────
+
+
+def _fix_reply(post_id: int, text: str, *, chat_id: int = _OWNER_ID, is_bot: bool = True) -> dict:
+    prompt = (
+        "Reply to this message with the corrected Hebrew caption "
+        f'(post #{post_id} · card 77). Start with "en:" to fix the English instead.'
+    )
+    return {
+        "chat": {"id": chat_id},
+        "text": text,
+        "reply_to_message": {"from": {"is_bot": is_bot}, "text": prompt},
+    }
+
+
+async def _feedback(session: AsyncSession, post_id: int) -> list[Feedback]:
+    rows = await session.scalars(select(Feedback).where(Feedback.post_id == post_id))
+    return list(rows)
+
+
+async def test_fix_button_prompts_for_edit(session: AsyncSession) -> None:
+    posts = await generate.generate_batch(session, n=1, brand="b")
+    notifier = _FakeNotifier()
+    await process_callback(session, notifier, _photo_cb(posts[0].id, "fix"))
+    assert notifier.edit_prompts == [(_photo_cb(0, "x")["message"], posts[0].id)]
+    assert await _feedback(session, posts[0].id) == []  # asking changes nothing
+
+
+async def test_fix_button_refused_when_published(session: AsyncSession) -> None:
+    posts = await generate.generate_batch(session, n=1, brand="b")
+    posts[0].status = PostStatus.PUBLISHED
+    await session.commit()
+    notifier = _FakeNotifier()
+    await process_callback(session, notifier, _photo_cb(posts[0].id, "fix"))
+    assert notifier.edit_prompts == []
+    assert "Can't edit" in notifier.toasts[0][1]
+
+
+async def test_he_reply_approves_suggested_with_delta(session: AsyncSession) -> None:
+    post = (await generate.generate_batch(session, n=1, brand="b"))[0]
+    old_he, old_en = post.caption_he, post.caption_en
+    notifier = _FakeNotifier()
+    await process_message(session, notifier, _fix_reply(post.id, "כיתוב מתוקן"), _OWNER_SETTINGS)
+    await session.refresh(post)
+    assert post.status == PostStatus.APPROVED and post.queue_position is not None
+    assert (post.caption_he, post.caption_en) == ("כיתוב מתוקן", old_en)
+    (fb,) = await _feedback(session, post.id)
+    assert (fb.decision, fb.edit_lang, fb.edit_before, fb.edit_after) == (
+        "approve",
+        "he",
+        old_he,
+        "כיתוב מתוקן",
+    )
+    assert [(c, m) for c, m, _ in notifier.edited] == [(_OWNER_ID, 77)]
+
+
+async def test_en_prefix_fixes_english(session: AsyncSession) -> None:
+    post = (await generate.generate_batch(session, n=1, brand="b"))[0]
+    old_he = post.caption_he
+    await process_message(
+        session, _FakeNotifier(), _fix_reply(post.id, "EN: better caption"), _OWNER_SETTINGS
+    )
+    await session.refresh(post)
+    assert (post.caption_he, post.caption_en) == (old_he, "better caption")
+    (fb,) = await _feedback(session, post.id)
+    assert (fb.edit_lang, fb.edit_after) == ("en", "better caption")
+
+
+async def test_edit_of_approved_keeps_queue_position(session: AsyncSession) -> None:
+    post = (await generate.generate_batch(session, n=1, brand="b"))[0]
+    await review.handle_decision(session, post.id, "approve")
+    await session.refresh(post)
+    pos = post.queue_position
+    await process_message(session, _FakeNotifier(), _fix_reply(post.id, "תיקון"), _OWNER_SETTINGS)
+    await session.refresh(post)
+    assert post.status == PostStatus.APPROVED and post.queue_position == pos
+    assert post.caption_he == "תיקון"
+    assert len(await _feedback(session, post.id)) == 2  # the approve + the edit
+
+
+async def test_edit_refused_for_published_and_rejected(session: AsyncSession) -> None:
+    for status in (PostStatus.PUBLISHED, PostStatus.REJECTED):
+        post = (await generate.generate_batch(session, n=1, brand="b"))[0]
+        old = post.caption_he
+        post.status = status
+        await session.commit()
+        notifier = _FakeNotifier()
+        await process_message(session, notifier, _fix_reply(post.id, "nope"), _OWNER_SETTINGS)
+        await session.refresh(post)
+        assert post.caption_he == old and post.status == status
+        assert notifier.edited == [] and "can't edit" in notifier.messages[0]
+        assert await _feedback(session, post.id) == []
+
+
+async def test_unchanged_and_empty_edit_are_noops(session: AsyncSession) -> None:
+    post = (await generate.generate_batch(session, n=1, brand="b"))[0]
+    notifier = _FakeNotifier()
+    await process_message(session, notifier, _fix_reply(post.id, post.caption_he), _OWNER_SETTINGS)
+    await process_message(session, notifier, _fix_reply(post.id, "en:"), _OWNER_SETTINGS)
+    await session.refresh(post)
+    assert post.status == PostStatus.SUGGESTED
+    assert "unchanged" in notifier.messages[0] and "Empty" in notifier.messages[1]
+
+
+async def test_edit_from_non_owner_or_non_bot_prompt_ignored(session: AsyncSession) -> None:
+    post = (await generate.generate_batch(session, n=1, brand="b"))[0]
+    notifier = _FakeNotifier()
+    await process_message(session, notifier, _fix_reply(post.id, "x", chat_id=999), _OWNER_SETTINGS)
+    await process_message(
+        session, notifier, _fix_reply(post.id, "x", is_bot=False), _OWNER_SETTINGS
+    )
+    await session.refresh(post)
+    assert post.status == PostStatus.SUGGESTED and post.caption_he != "x"
+    assert notifier.messages == [] and notifier.edited == []
