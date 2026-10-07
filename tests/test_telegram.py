@@ -91,7 +91,9 @@ _OWNER_SETTINGS = Settings(
 
 @pytest.fixture(autouse=True)
 def _stub_llm(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_caption(brand: str, image_path: Path, settings: Settings) -> PostSuggestion:
+    async def fake_caption(
+        brand: str, image_path: Path, settings: Settings, context: object = None
+    ) -> PostSuggestion:
         return PostSuggestion(
             caption_he="כיתוב",
             caption_en="caption",

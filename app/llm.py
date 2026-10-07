@@ -16,6 +16,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from app.config import Settings
+from app.learning import LearningContext, render
 from app.schemas import PostSuggestion
 from app.stock import load_image_b64
 
@@ -38,7 +39,7 @@ Here are the brand guidelines (the source of truth for voice, rules, and themes)
 <brand_guidelines>
 {brand}
 </brand_guidelines>
-
+{learning}
 The attached image is the post's visual. Write a caption grounded in what you actually see in
 the image — never invent a different scene. Write the caption in native-quality Hebrew (the
 primary language; this is a hard quality gate, not a translation) and in English, both in the
@@ -53,6 +54,11 @@ Return a JSON object of this exact shape:
 - visual_concept: one sentence describing what the image actually shows.
 - rationale: one sentence on why this fits the brand (for the human reviewer).
 """
+
+
+def _user_prompt(brand: str, context: LearningContext | None) -> str:
+    block = render(context)
+    return _USER_TEMPLATE.format(brand=brand, learning=f"\n{block}\n" if block else "")
 
 
 def _provider_key(s: Settings) -> str | None:
@@ -105,8 +111,17 @@ def _stub_suggestion(image_path: Path) -> PostSuggestion:
     )
 
 
-async def caption_image(brand: str, image_path: Path, settings: Settings) -> PostSuggestion:
-    """Caption ``image_path`` (vision) in the brand's voice. One call per image."""
+async def caption_image(
+    brand: str,
+    image_path: Path,
+    settings: Settings,
+    context: LearningContext | None = None,
+) -> PostSuggestion:
+    """Caption ``image_path`` (vision) in the brand's voice. One call per image.
+
+    ``context`` (M8) adds the owner's approved posts / reject hints / recent posts to the
+    prompt; ``None`` or empty renders exactly the pre-M8 prompt.
+    """
     if not _has_provider_key(settings):
         logger.warning("No LLM provider key configured — returning a stub suggestion.")
         return _stub_suggestion(image_path)
@@ -121,7 +136,7 @@ async def caption_image(brand: str, image_path: Path, settings: Settings) -> Pos
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": _USER_TEMPLATE.format(brand=brand)},
+                {"type": "text", "text": _user_prompt(brand, context)},
                 {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64}"}},
             ],
         },

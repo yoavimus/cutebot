@@ -51,7 +51,7 @@ class _FailPublisher:
 @pytest.fixture(autouse=True)
 def _stub_llm(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_caption_image(
-        brand: str, image_path: Path, settings: Settings
+        brand: str, image_path: Path, settings: Settings, context: object = None
     ) -> PostSuggestion:
         return PostSuggestion(
             caption_he=f"כיתוב {image_path.name}",
@@ -189,7 +189,9 @@ async def test_generate_skips_failed_image_keeps_good_ones(
 ) -> None:
     call_count = 0
 
-    async def flaky_caption(brand: str, image_path: Path, settings: Settings) -> PostSuggestion:
+    async def flaky_caption(
+        brand: str, image_path: Path, settings: Settings, context: object = None
+    ) -> PostSuggestion:
         nonlocal call_count
         call_count += 1
         if call_count == 2:
@@ -210,7 +212,9 @@ async def test_generate_skips_failed_image_keeps_good_ones(
 async def test_generate_all_failed_returns_empty_batch(
     session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def always_fail(brand: str, image_path: Path, settings: Settings) -> PostSuggestion:
+    async def always_fail(
+        brand: str, image_path: Path, settings: Settings, context: object = None
+    ) -> PostSuggestion:
         raise CaptionError("simulated total failure")
 
     monkeypatch.setattr(llm, "caption_image", always_fail)
@@ -372,9 +376,7 @@ async def test_full_state_transition_arc(session: AsyncSession) -> None:
 
 
 def _catchup_settings() -> Settings:
-    return Settings(
-        posting_slots="12:00,18:00", schedule_tz="UTC", catchup_window_min=60
-    )
+    return Settings(posting_slots="12:00,18:00", schedule_tz="UTC", catchup_window_min=60)
 
 
 async def test_catch_up_publishes_when_slot_missed(session: AsyncSession) -> None:

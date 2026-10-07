@@ -51,6 +51,12 @@ class Settings(BaseSettings):
     catchup_window_min: int = 60
     brand_file: str = "brand.md"
 
+    # Learning loop (M8): prompt context derived from the owner's past decisions.
+    learning_enabled: bool = True
+    learning_examples: int = 5  # approved posts shown as few-shot (edited ones first)
+    learning_recent: int = 10  # published captions shown as "don't repeat"
+    learning_window_days: int = 30  # reject reasons counted over this window
+
     # Image-first generation (stock library + bilingual captioning)
     stock_images_dir: str = "stock"
     primary_language: str = "he"
