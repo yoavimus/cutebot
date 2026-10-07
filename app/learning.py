@@ -37,6 +37,14 @@ class LearningContext(BaseModel):
     reject_hints: dict[str, int] = {}
     edits: list[Edit] = []
 
+    def summary(self) -> str:
+        """One line for /status and the eval header: what the model will see."""
+        hints = sum(self.reject_hints.values())
+        return (
+            f"{len(self.examples)} examples · {len(self.edits)} edits · "
+            f"{len(self.recent)} recent · {hints} reject hints"
+        )
+
     @property
     def is_empty(self) -> bool:
         return not (self.examples or self.recent or self.reject_hints or self.edits)

@@ -486,3 +486,11 @@ async def test_edit_from_non_owner_or_non_bot_prompt_ignored(session: AsyncSessi
     await session.refresh(post)
     assert post.status == PostStatus.SUGGESTED and post.caption_he != "x"
     assert notifier.messages == [] and notifier.edited == []
+
+
+async def test_status_shows_learning_counts(session: AsyncSession) -> None:
+    post = (await generate.generate_batch(session, n=1, brand="b"))[0]
+    await process_message(session, _FakeNotifier(), _fix_reply(post.id, "תיקון"), _OWNER_SETTINGS)
+    notifier = _FakeNotifier()
+    await process_message(session, notifier, _msg(_OWNER_ID, "/status"), _OWNER_SETTINGS)
+    assert "learning: 1 examples · 1 edits · 0 recent · 0 reject hints" in notifier.messages[0]

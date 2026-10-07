@@ -28,7 +28,7 @@ import httpx
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import stock
+from app import learning, stock
 from app.config import Settings, get_settings
 from app.models import BannedImage, Post, PostStatus
 from app.pipeline.review import apply_edit, handle_decision
@@ -320,6 +320,8 @@ async def _build_status_summary(session: AsyncSession, settings: Settings) -> st
     queue_depth = counts.get(PostStatus.APPROVED, 0) + counts.get(PostStatus.PUBLISHING, 0)
     lines.append(f"\nQueue depth: {queue_depth}")
     lines.append(stock.summary_line(await stock.counts(session, settings)))
+    ctx = await learning.build_context(session, settings)
+    lines.append("learning: " + ("off" if not settings.learning_enabled else ctx.summary()))
     if recent:
         lines.append("\nLast published:")
         for p in recent:

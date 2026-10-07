@@ -78,6 +78,8 @@ side-by-side by the owner (native Hebrew speaker). History:
   at ~$0.057/post → runtime default is `anthropic/claude-opus-5-5` (PRODUCT_SPEC §3,
   CLAUDE.md, `app/config.py`, `env.example` updated together — a silent switch is a spec
   deviation). Sonnet 5.5 (~$0.028) is the cost fallback.
+- **M8 learning A/B** (Opus 5.5, `--learning` vs not, 10 images): _pending — owner runs it
+  against a prod snapshot and records the verdict here._
 Standing: re-run after each provider release (candidates take `@effort`), record here.
 (Background: docs/POST_V1_REVIEW.md §3.1; owner notes
 docs/issues/cutebot_issues_05_10_2026_findings.md §6.)

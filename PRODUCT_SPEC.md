@@ -154,13 +154,13 @@ disclosure wording.
 
 Deferred — not in v1, in rough priority order:
 
-- **A. Learning loop v2** — fine-tune the prompt from accumulated `Feedback`
+- **A. Learning loop** — **shipped in M8** (`app/learning.py`; v2 = distillation, M8.4/M10). Original scope: fine-tune the prompt from accumulated `Feedback`
   (few-shot selection of past approvals; learn from rejections).
 - **B. Image generation** — *deferred for the foreseeable future.* v1 is image-first off
   the owner's stock library (§3). This item would reintroduce a text-first path: generate
   a caption, then synthesize a matching image from `visual_concept` (e.g. an image model)
   instead of selecting from stock.
-- **C. Inline editing** — "Approve with edits" in Telegram; capture the edit as a
+- **C. Inline editing** — **shipped in M8** (✏️ Fix). "Approve with edits" in Telegram; capture the edit as a
   stronger training signal than approve/reject.
 - **D. More review channels** — Discord and Slack notifier adapters.
 - **E. Real publishers** — implement Instagram Graph, TikTok, and X adapters with

@@ -9,6 +9,8 @@ Usage (from the repo root, venv active, keys in .env):
     python -m scripts.eval_models                          # defaults below
     python -m scripts.eval_models --models anthropic/claude-sonnet-5-5,openai/gpt-6-sol
     python -m scripts.eval_models --images 5 --out eval/eval_results.md
+    python -m scripts.eval_models --models anthropic/claude-opus-5-5 --learning \\
+        --out eval/eval_learning.md   # A/B: same model with M8 learning context (DATABASE_URL)
 
 A candidate is ``<litellm id>[@<reasoning effort>]`` — ``openai/gpt-6.1-sol@high``
 runs Sol at high reasoning; no suffix = provider default. (Effort applies to OpenAI
@@ -26,7 +28,7 @@ import random
 import time
 from pathlib import Path
 
-from app import llm, stock
+from app import learning, llm, stock
 from app.brand import load_brand
 from app.config import get_settings
 
@@ -39,6 +41,7 @@ DEFAULT_MODELS = [
     "openai/gpt-6.1-sol@xhigh",
 ]
 
+
 def post_cost(model: str, tokens_in: int | None, tokens_out: int | None) -> float | None:
     """Cost of one call from LiteLLM's bundled price table (None if the id is unknown)."""
     import litellm
@@ -49,19 +52,26 @@ def post_cost(model: str, tokens_in: int | None, tokens_out: int | None) -> floa
     return tokens_in * price["input_cost_per_token"] + tokens_out * price["output_cost_per_token"]
 
 
-async def run(models: list[str], n_images: int, out: str) -> None:
+async def run(models: list[str], n_images: int, out: str, use_learning: bool = False) -> None:
     settings = get_settings()
     brand = load_brand()
     images = stock.list_images(settings)
     if not images:
         raise SystemExit(f"No stock images in {settings.stock_images_dir!r} — nothing to caption.")
     sample = random.sample(images, min(n_images, len(images)))
+    context = None
+    if use_learning:
+        from app.db import SessionLocal
+
+        async with SessionLocal() as session:
+            context = await learning.build_context(session, settings)
 
     lines = [
         "# Model eval — Hebrew quality gate",
         "",
         f"Brand file: `{settings.brand_file}` · images: {len(sample)} · models: "
         + ", ".join(f"`{m}`" for m in models),
+        "Learning context: " + (f"**ON** — {context.summary()}" if context else "off"),
         "",
         "Review guide: native-quality Hebrew (not translated), brand voice, hard-rule",
         "adherence (signature line, no emoji, no serious marketing tone).",
@@ -79,7 +89,7 @@ async def run(models: list[str], n_images: int, out: str) -> None:
             )
             t0 = time.monotonic()
             try:
-                sug = await llm.caption_image(brand, image, s)
+                sug = await llm.caption_image(brand, image, s, context)
                 elapsed = time.monotonic() - t0
                 cost = post_cost(model, sug.tokens_in, sug.tokens_out)
                 if cost is None:
@@ -110,8 +120,8 @@ async def run(models: list[str], n_images: int, out: str) -> None:
     per_model = ", ".join(
         f"`{m}` ${totals[m]:.3f}" + (" (partial)" if m in unpriced else "") for m in models
     )
-    lines.insert(3, f"Cost for {len(sample)} posts: {per_model}")
-    lines.insert(4, "")
+    lines.insert(4, f"Cost for {len(sample)} posts: {per_model}")
+    lines.insert(5, "")
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     Path(out).write_text("\n".join(lines), encoding="utf-8")
     print(f"\nWrote {out} — review side-by-side and record the decision in DEV_GUIDELINES.md.")
@@ -122,9 +132,12 @@ def main() -> None:
     p.add_argument("--models", default=",".join(DEFAULT_MODELS), help="comma-separated LiteLLM ids")
     p.add_argument("--images", type=int, default=4, help="how many stock images to sample")
     p.add_argument("--out", default="eval/eval_results.md", help="output Markdown file")
+    p.add_argument(
+        "--learning", action="store_true", help="pass the LearningContext built from DATABASE_URL"
+    )
     args = p.parse_args()
     models = [m.strip() for m in args.models.split(",") if m.strip()]
-    asyncio.run(run(models, args.images, args.out))
+    asyncio.run(run(models, args.images, args.out, args.learning))
 
 
 if __name__ == "__main__":

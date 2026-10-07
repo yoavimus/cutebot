@@ -76,7 +76,7 @@ python -m app.notifier.telegram delete-webhook
 ### Bot commands (owner-gated; work in dev and prod — M6)
 
 ```
-/status          counts by status, queue depth, stock counts, last 5 published
+/status          counts by status, queue depth, stock counts, learning counts, last 5 published
 /generate [N]    generate N suggestions now (default BATCH_SIZE) + DM for review
 /postnow [id]    publish front-of-queue, or a specific APPROVED post by id
 /queue           approved posts in queue order
@@ -113,6 +113,12 @@ state: the post id travels in the prompt text.
 python -m scripts.eval_models                          # default candidate list
 python -m scripts.eval_models --models anthropic/claude-sonnet-5-5,openai/gpt-6.1-sol@high
 python -m scripts.eval_models --images 5 --out eval/eval_results.md
+
+# Learning A/B (M8): same model twice, without and with the real LearningContext built
+# from DATABASE_URL (point it at a prod snapshot for real feedback; read-only). The
+# header records examples/edits/recent/hint counts. ~$0.60 per 10-image pair on Opus.
+python -m scripts.eval_models --models anthropic/claude-opus-5-5 --images 10 --out eval/eval_plain.md
+python -m scripts.eval_models --models anthropic/claude-opus-5-5 --images 10 --learning --out eval/eval_learning.md
 
 # Render the results as a side-by-side HTML page (local, no upload; images load from
 # stock/ by relative path).
