@@ -98,6 +98,11 @@ class Feedback(Base):
     post_id: Mapped[int] = mapped_column(ForeignKey("posts.id"))
     decision: Mapped[Decision] = mapped_column(String(16))
     reason: Mapped[str | None] = mapped_column(String(32), default=None)
+    # ✏️ Fix (M8.2): an approve-with-edits records the delta. Decision stays ``approve``.
+    # ponytail: two text columns beat a JSON blob — the learning query reads them directly.
+    edit_lang: Mapped[str | None] = mapped_column(String(2), default=None)  # "he" | "en"
+    edit_before: Mapped[str | None] = mapped_column(Text, default=None)
+    edit_after: Mapped[str | None] = mapped_column(Text, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     post: Mapped[Post] = relationship(back_populates="feedback")

@@ -11,7 +11,7 @@ import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import llm, stock
+from app import learning, llm, stock
 from app.brand import load_brand
 from app.config import get_settings
 from app.llm import CaptionError
@@ -31,6 +31,7 @@ async def generate_batch(
     size = n or settings.batch_size
     brand_text = brand if brand is not None else load_brand()
 
+    context = await learning.build_context(session, settings)
     images = await stock.select_images(session, size, settings)
 
     batch = Batch(
@@ -45,7 +46,7 @@ async def generate_batch(
     posts: list[Post] = []
     for image in images:
         try:
-            s = await llm.caption_image(brand_text, image, settings)
+            s = await llm.caption_image(brand_text, image, settings, context)
         except CaptionError as exc:
             logger.warning("Skipping image %s: %s", image.name, exc)
             continue

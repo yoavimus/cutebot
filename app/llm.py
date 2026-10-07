@@ -12,11 +12,13 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 from pydantic import ValidationError
 
 from app.config import Settings
-from app.schemas import PostSuggestion
+from app.learning import LearningContext, render
+from app.schemas import BrandProposal, PostSuggestion
 from app.stock import load_image_b64
 
 logger = logging.getLogger(__name__)
@@ -38,7 +40,7 @@ Here are the brand guidelines (the source of truth for voice, rules, and themes)
 <brand_guidelines>
 {brand}
 </brand_guidelines>
-
+{learning}
 The attached image is the post's visual. Write a caption grounded in what you actually see in
 the image — never invent a different scene. Write the caption in native-quality Hebrew (the
 primary language; this is a hard quality gate, not a translation) and in English, both in the
@@ -53,6 +55,11 @@ Return a JSON object of this exact shape:
 - visual_concept: one sentence describing what the image actually shows.
 - rationale: one sentence on why this fits the brand (for the human reviewer).
 """
+
+
+def _user_prompt(brand: str, context: LearningContext | None) -> str:
+    block = render(context)
+    return _USER_TEMPLATE.format(brand=brand, learning=f"\n{block}\n" if block else "")
 
 
 def _provider_key(s: Settings) -> str | None:
@@ -105,32 +112,23 @@ def _stub_suggestion(image_path: Path) -> PostSuggestion:
     )
 
 
-async def caption_image(brand: str, image_path: Path, settings: Settings) -> PostSuggestion:
-    """Caption ``image_path`` (vision) in the brand's voice. One call per image."""
-    if not _has_provider_key(settings):
-        logger.warning("No LLM provider key configured — returning a stub suggestion.")
-        return _stub_suggestion(image_path)
+async def _complete(
+    messages: list[dict[str, Any]], settings: Settings, min_tokens: int = 0
+) -> Any:
+    """One LiteLLM completion with the provider quirks applied (token cap, effort, JSON mode).
 
+    ``min_tokens`` raises the output cap for calls whose answer is known to be long (the
+    distillation returns a whole brand file).
+    """
     # Imported lazily so the package imports cleanly without litellm installed in
     # minimal environments, and so the offline path never touches the network.
     import litellm
 
-    mime_type, b64 = load_image_b64(image_path)
-    messages = [
-        {"role": "system", "content": _SYSTEM_PROMPT},
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": _USER_TEMPLATE.format(brand=brand)},
-                {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64}"}},
-            ],
-        },
-    ]
     # OpenAI models (GPT-5+/GPT-6/o-series) reject the legacy max_tokens and want
     # max_completion_tokens; everything else (incl. Claude) uses max_tokens.
     is_openai = settings.default_llm_model.startswith("openai/")
     effort = settings.llm_reasoning_effort if is_openai else ""
-    cap = settings.llm_max_tokens
+    cap = max(settings.llm_max_tokens, min_tokens)
     if effort and effort != "none":
         # reasoning tokens count against the completion cap — a tight cap returns
         # empty content instead of a caption.
@@ -146,7 +144,7 @@ async def caption_image(brand: str, image_path: Path, settings: Settings) -> Pos
         if settings.default_llm_model.startswith("anthropic/")
         else {"response_format": {"type": "json_object"}}
     )
-    response = await litellm.acompletion(
+    return await litellm.acompletion(
         model=settings.default_llm_model,
         messages=messages,
         **fmt,
@@ -158,6 +156,35 @@ async def caption_image(brand: str, image_path: Path, settings: Settings) -> Pos
         # loads them into Settings, not the environment.
         api_key=_provider_key(settings),
     )
+
+
+async def caption_image(
+    brand: str,
+    image_path: Path,
+    settings: Settings,
+    context: LearningContext | None = None,
+) -> PostSuggestion:
+    """Caption ``image_path`` (vision) in the brand's voice. One call per image.
+
+    ``context`` (M8) adds the owner's approved posts / reject hints / recent posts to the
+    prompt; ``None`` or empty renders exactly the pre-M8 prompt.
+    """
+    if not _has_provider_key(settings):
+        logger.warning("No LLM provider key configured — returning a stub suggestion.")
+        return _stub_suggestion(image_path)
+
+    mime_type, b64 = load_image_b64(image_path)
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": _SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": _user_prompt(brand, context)},
+                {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64}"}},
+            ],
+        },
+    ]
+    response = await _complete(messages, settings)
     content = _strip_fences(response["choices"][0]["message"]["content"])
     try:
         data = json.loads(content)
@@ -171,3 +198,46 @@ async def caption_image(brand: str, image_path: Path, settings: Settings) -> Pos
         sug.tokens_in = getattr(usage, "prompt_tokens", None)
         sug.tokens_out = getattr(usage, "completion_tokens", None)
     return sug
+
+
+_DISTILL_PROMPT = """\
+Below are the brand guidelines (brand.md) and the owner's recent feedback on generated posts:
+approved examples, hand-corrected captions, and reasons posts were rejected.
+
+<brand_guidelines>
+{brand}
+</brand_guidelines>
+
+<recent_feedback>
+{evidence}
+</recent_feedback>
+
+Propose a minimal revision of brand.md that captures what the feedback teaches — voice,
+hard rules, phrasing the owner corrects. Change only what the evidence supports; keep every
+existing hard rule and the file's structure and language. If nothing is worth changing,
+return the file unchanged.
+
+Return ONLY a JSON object: {{"new_brand": "<the complete revised brand.md>",
+"rationale": "<one paragraph: what changed and which feedback justifies it>"}}
+"""
+
+
+async def distill_brand(brand: str, evidence: str, settings: Settings) -> BrandProposal:
+    """Ask the model for a revised ``brand.md`` given recent feedback (M8.4, owner-triggered)."""
+    if not _has_provider_key(settings):
+        raise CaptionError("No LLM provider key configured — cannot distill.")
+    response = await _complete(
+        [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": _DISTILL_PROMPT.format(brand=brand, evidence=evidence)},
+        ],
+        settings,
+        # the answer embeds the complete revised brand.md (~10 KB of Hebrew) plus thinking
+        min_tokens=16000,
+    )
+    content = _strip_fences(response["choices"][0]["message"]["content"])
+    try:
+        return BrandProposal.model_validate(_unwrap_json_envelope(json.loads(content)))
+    except (json.JSONDecodeError, ValidationError) as exc:
+        logger.error("LLM returned invalid distillation: %.200s", content)
+        raise CaptionError(str(exc)) from exc

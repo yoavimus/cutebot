@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     # LLM reliability (passed to LiteLLM; see app/llm.py)
     llm_timeout_s: int = 60
     llm_num_retries: int = 2
-    llm_max_tokens: int = 2000
+    llm_max_tokens: int = 4000
 
     # Telegram review channel
     telegram_bot_token: str = ""
@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     # process was down (deploys straddling a slot would otherwise skip it silently).
     catchup_window_min: int = 60
     brand_file: str = "brand.md"
+
+    # Learning loop (M8): prompt context derived from the owner's past decisions.
+    learning_enabled: bool = True
+    learning_examples: int = 5  # approved posts shown as few-shot (edited ones first)
+    learning_recent: int = 10  # published captions shown as "don't repeat"
+    learning_window_days: int = 30  # reject reasons counted over this window
 
     # Image-first generation (stock library + bilingual captioning)
     stock_images_dir: str = "stock"

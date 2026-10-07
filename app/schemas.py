@@ -23,6 +23,13 @@ class PostSuggestion(BaseModel):
     tokens_out: int | None = Field(default=None, exclude=True)
 
 
+class BrandProposal(BaseModel):
+    """``/distill`` output: the complete revised brand file + why (the diff is computed in code)."""
+
+    new_brand: str
+    rationale: str
+
+
 class PostOut(BaseModel):
     """API representation of a stored post."""
 

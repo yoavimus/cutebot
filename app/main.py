@@ -104,7 +104,7 @@ async def telegram_webhook(
     cb = update.get("callback_query")
     msg = update.get("message")
     if cb:
-        await process_callback(session, notifier, cb)
+        await process_callback(session, notifier, cb, settings)
     elif msg:
         await process_message(session, notifier, msg, settings)
     else:

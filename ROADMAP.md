@@ -196,11 +196,13 @@ Owner review 2026-10-05: `docs/issues/cutebot_issues_05_10_2026.md` + findings (
 1–9). Shipped the same day: Telegram command menu + `/help`, `/stock` + "🚫 Ban image"
 reject chip, no stock recycling, eval cost column.
 
-1. **M8 — learning loop v1** — **in progress (approved 2026-10-07)**: plan
-   `docs/plans/M8_PLAN.md`, epic CUT-63, tickets CUT-64…67. Few-shot from the owner's
-   approved posts + reject-reason hints + recent-post memory (CUT-64), ✏️ Fix button
-   with edit deltas (CUT-65), `--learning` A/B on the eval harness + close-out (CUT-66),
-   `/distill` brand distillation as a stretch (CUT-67 → M10 if it doesn't fit).
+1. **M8 — learning loop v1** — **built 2026-10-07, PR open (not yet deployed)**: plan
+   `docs/archive/M8_PLAN.md`, epic CUT-63, tickets CUT-64…67.
+   - [x] **M8.1** (CUT-64) — `app/learning.py` context into `caption_image`.
+   - [x] **M8.2** (CUT-65) — ✏️ Fix button + migration `0006`.
+   - [x] **M8.3** (CUT-66) — `--learning` eval flag + `/status` line; the paid A/B page
+     is owner-run (`--learning` against a prod snapshot).
+   - [x] **M8.4** (CUT-67) — `/distill` brand distillation (`app/distill.py`).
 2. **M9 — Carousel posts** (graduated from backlog 2026-10-05):
    - Storage: JSON list column `image_refs` on `Post` (one migration; `image_ref`
      stays as the cover). A join table only when slides need per-slide captions.

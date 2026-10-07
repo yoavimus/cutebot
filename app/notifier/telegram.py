@@ -5,6 +5,9 @@ Callback data:
   ``reject:<post_id>``             → show reason-picker chips
   ``reason:<post_id>:<reason>``    → reject with the given reason (or "skip");
                                      ``ban_image`` also bans the photo from future batches
+  ``distill:apply|discard:<token>`` → owner's answer to a /distill brand.md proposal
+  ``fix:<post_id>``                → ForceReply prompt; the owner's reply (``#<id>`` in the
+                                     prompt text — stateless) replaces the caption and approves
 
 Run modes (CLI):
     python -m app.notifier.telegram poll           # long-poll (no public URL needed)
@@ -17,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -25,10 +29,10 @@ import httpx
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import stock
+from app import distill, learning, stock
 from app.config import Settings, get_settings
 from app.models import BannedImage, Post, PostStatus
-from app.pipeline.review import handle_decision
+from app.pipeline.review import apply_edit, handle_decision
 from app.render import image_path, render_full_caption
 
 logger = logging.getLogger(__name__)
@@ -47,6 +51,15 @@ _REJECT_REASONS: dict[str, str] = {
 # Rejecting with this reason also bans the image from future suggestions.
 _BAN_REASON = "ban_image"
 
+# The ✏️ Fix prompt. Stateless: the post id and the card's message id travel in the text, and
+# process_message recognises the owner's reply by this marker + _EDIT_REF.
+_EDIT_PROMPT = (
+    "Reply to this message with the corrected Hebrew caption (post #{post_id} · card {card}). "
+    'Start with "en:" to fix the English instead.'
+)
+_EDIT_MARKER = "Reply to this message with the corrected"
+_EDIT_REF = re.compile(r"post #(\d+) · card (\d+)")
+
 # Shown in Telegram's "/" menu (setMyCommands) and by /help. Order = menu order.
 _COMMAND_HELP: list[tuple[str, str]] = [
     ("status", "pipeline counts, queue depth, stock"),
@@ -56,6 +69,7 @@ _COMMAND_HELP: list[tuple[str, str]] = [
     ("postnow", "publish next in queue, or /postnow <id>"),
     ("requeue", "put a failed post back: /requeue <id>"),
     ("stock", "stock library counts; /stock unban <file>"),
+    ("distill", "propose a brand.md revision from recent feedback"),
     ("help", "this list"),
 ]
 
@@ -80,6 +94,7 @@ class TelegramNotifier:
                 [
                     {"text": "✅ Approve", "callback_data": f"approve:{post.id}"},
                     {"text": "❌ Reject", "callback_data": f"reject:{post.id}"},
+                    {"text": "✏️ Fix", "callback_data": f"fix:{post.id}"},
                 ]
             ]
         }
@@ -151,16 +166,16 @@ class TelegramNotifier:
         """Edit the reviewed message; leave the opposite button while decision is reversible."""
         if post.status == PostStatus.APPROVED:
             label = "✅ Approved"
-            keyboard: dict[str, Any] = {"inline_keyboard": [[
-                {"text": "↩︎ Reject", "callback_data": f"reject:{post.id}"}
-            ]]}
+            keyboard: dict[str, Any] = {
+                "inline_keyboard": [[{"text": "↩︎ Reject", "callback_data": f"reject:{post.id}"}]]
+            }
         elif post.status == PostStatus.REJECTED:
             label = "❌ Rejected"
             if reason:
                 label += f" ({reason})"
-            keyboard = {"inline_keyboard": [[
-                {"text": "↩︎ Approve", "callback_data": f"approve:{post.id}"}
-            ]]}
+            keyboard = {
+                "inline_keyboard": [[{"text": "↩︎ Approve", "callback_data": f"approve:{post.id}"}]]
+            }
         else:
             label = "✅ Published" if post.status == PostStatus.PUBLISHED else f"[{post.status}]"
             keyboard = {"inline_keyboard": []}
@@ -189,6 +204,91 @@ class TelegramNotifier:
                 )
         except Exception as exc:
             logger.warning("mark_decided failed: message=%s error=%s", message_id, exc)
+
+    async def prompt_edit(self, cb_message: dict, post_id: int) -> None:
+        """Ask the owner for the corrected caption (ForceReply; state lives in the text)."""
+        text = _EDIT_PROMPT.format(post_id=post_id, card=cb_message["message_id"])
+        async with httpx.AsyncClient(timeout=15) as client:
+            await client.post(
+                self._url("sendMessage"),
+                json={
+                    "chat_id": cb_message["chat"]["id"],
+                    "text": text,
+                    "reply_markup": {
+                        "force_reply": True,
+                        "input_field_placeholder": "he, or en: …",
+                    },
+                },
+            )
+
+    async def send_distill(self, proposal: distill.Proposal) -> None:
+        """DM a brand.md proposal with ✅ Apply / ❌ Discard."""
+        diff = proposal.diff
+        if len(diff) > _DISTILL_DIFF_LIMIT:
+            diff = diff[:_DISTILL_DIFF_LIMIT] + "\n… (diff truncated; Apply writes the full file)"
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "✅ Apply", "callback_data": f"distill:apply:{proposal.token}"},
+                    {"text": "❌ Discard", "callback_data": f"distill:discard:{proposal.token}"},
+                ]
+            ]
+        }
+        async with httpx.AsyncClient(timeout=15) as client:
+            await client.post(
+                self._url("sendMessage"),
+                json={
+                    "chat_id": self._settings.telegram_chat_id,
+                    "text": f"{proposal.rationale}\n\n{diff}",
+                    "reply_markup": keyboard,
+                },
+            )
+
+    async def mark_distilled(self, cb_message: dict, label: str) -> None:
+        """Replace the proposal's buttons with the outcome."""
+        async with httpx.AsyncClient(timeout=15) as client:
+            await client.post(
+                self._url("editMessageText"),
+                json={
+                    "chat_id": cb_message["chat"]["id"],
+                    "message_id": cb_message["message_id"],
+                    "text": f"{cb_message.get('text', '')}\n\n{label}",
+                    "reply_markup": {"inline_keyboard": []},
+                },
+            )
+
+    async def show_edited(self, chat_id: int, card_id: int, post: Post) -> None:
+        """Re-render the review card with the final caption + ``✅ Approved (edited)``."""
+        body = f"{render_full_caption(post, self._settings)}\n\n✅ Approved (edited)"
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "↩︎ Reject", "callback_data": f"reject:{post.id}"},
+                    {"text": "✏️ Fix", "callback_data": f"fix:{post.id}"},
+                ]
+            ]
+        }
+        # The card is a photo (caption) or, for long captions, plain text — try both.
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                for endpoint, key in (
+                    ("editMessageCaption", "caption"),
+                    ("editMessageText", "text"),
+                ):
+                    resp = await client.post(
+                        self._url(endpoint),
+                        json={
+                            "chat_id": chat_id,
+                            "message_id": card_id,
+                            key: body,
+                            "reply_markup": keyboard,
+                        },
+                    )
+                    if resp.json().get("ok"):
+                        return
+            logger.warning("show_edited rejected for card %s: %s", card_id, resp.json())
+        except Exception as exc:
+            logger.warning("show_edited failed: card=%s error=%s", card_id, exc)
 
     async def show_reason_picker(self, cb_message: dict, post_id: int) -> None:
         """Edit the message in-place to display reject-reason chips."""
@@ -232,6 +332,8 @@ class TelegramNotifier:
             logger.warning("show_reason_picker failed: message=%s error=%s", message_id, exc)
 
 
+_DISTILL_DIFF_LIMIT = 3000  # keeps rationale + diff inside Telegram's 4096-char message cap
+_EDITABLE = (PostStatus.SUGGESTED, PostStatus.APPROVED)
 _TERMINAL_CB = {PostStatus.PUBLISHING, PostStatus.PUBLISHED, PostStatus.FAILED}
 
 
@@ -257,6 +359,8 @@ async def _build_status_summary(session: AsyncSession, settings: Settings) -> st
     queue_depth = counts.get(PostStatus.APPROVED, 0) + counts.get(PostStatus.PUBLISHING, 0)
     lines.append(f"\nQueue depth: {queue_depth}")
     lines.append(stock.summary_line(await stock.counts(session, settings)))
+    ctx = await learning.build_context(session, settings)
+    lines.append("learning: " + ("off" if not settings.learning_enabled else ctx.summary()))
     if recent:
         lines.append("\nLast published:")
         for p in recent:
@@ -279,7 +383,8 @@ async def _cmd_help(
 ) -> None:
     lines = ["Commands:"] + [f"/{c} — {d}" for c, d in _COMMAND_HELP]
     lines.append(
-        "\nReview cards: ✅ Approve · ❌ Reject (pick a reason; 🚫 Ban image retires the photo)."
+        "\nReview cards: ✅ Approve · ❌ Reject (pick a reason; 🚫 Ban image retires the photo)"
+        ' · ✏️ Fix (reply with the corrected Hebrew caption; "en:" prefix for English).'
     )
     lines.append("Send a photo to add it to the stock library.")
     await notifier.send_message("\n".join(lines))
@@ -400,6 +505,22 @@ async def _cmd_pending(
     await _rev.send_for_review(list(posts), notifier)
 
 
+async def _cmd_distill(
+    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+) -> None:
+    from app.llm import CaptionError
+
+    try:
+        result = await distill.propose(session, settings)
+    except CaptionError as exc:
+        await notifier.send_message(f"Distill failed: {exc}")
+        return
+    if isinstance(result, str):
+        await notifier.send_message(result)
+    else:
+        await notifier.send_distill(result)
+
+
 _COMMANDS: dict[str, Any] = {
     "/status": _cmd_status,
     "/generate": _cmd_generate,
@@ -408,6 +529,7 @@ _COMMANDS: dict[str, Any] = {
     "/requeue": _cmd_requeue,
     "/pending": _cmd_pending,
     "/stock": _cmd_stock,
+    "/distill": _cmd_distill,
     "/help": _cmd_help,
     "/start": _cmd_help,
 }
@@ -416,9 +538,7 @@ _COMMANDS: dict[str, Any] = {
 # ─────────────────────────────── photo upload ────────────────────────────────
 
 
-async def _handle_photo_upload(
-    notifier: TelegramNotifier, msg: dict, settings: Settings
-) -> None:
+async def _handle_photo_upload(notifier: TelegramNotifier, msg: dict, settings: Settings) -> None:
     photo = msg.get("photo", [])
     if not photo:
         return
@@ -446,6 +566,37 @@ async def _handle_photo_upload(
 # ─────────────────────────────── message dispatcher ──────────────────────────
 
 
+async def _maybe_apply_edit(
+    session: AsyncSession, notifier: TelegramNotifier, msg: dict, text: str
+) -> bool:
+    """If ``msg`` replies to our ✏️ Fix prompt, apply the edit. Returns True when handled."""
+    prompt = msg.get("reply_to_message") or {}
+    prompt_text = prompt.get("text") or ""  # a reply to a photo card has no "text" at all
+    ref = _EDIT_REF.search(prompt_text)
+    if not (prompt.get("from", {}).get("is_bot") and _EDIT_MARKER in prompt_text and ref):
+        return False
+    post_id, card_id = int(ref[1]), int(ref[2])
+    lang = "he"
+    if text[:3].lower() == "en:":
+        lang, text = "en", text[3:].strip()
+    if not text:
+        await notifier.send_message("Empty caption — nothing changed.")
+        return True
+    pre = await session.get(Post, post_id)
+    pre_state = (pre.status, pre.caption_he, pre.caption_en) if pre else None
+    post = await apply_edit(session, post_id, lang, text)
+    if post is None:
+        await notifier.send_message(f"Post #{post_id} not found.")
+    elif pre_state == (post.status, post.caption_he, post.caption_en):
+        # Nothing happened: either the text matched, or the status refuses edits.
+        reason = "is unchanged" if post.status in _EDITABLE else f"is {post.status}, can't edit"
+        await notifier.send_message(f"Post #{post_id} {reason}.")
+    else:
+        await notifier.show_edited(msg["chat"]["id"], card_id, post)
+        await notifier.send_message(f"Post #{post_id} updated ({lang}) ✅")
+    return True
+
+
 async def process_message(
     session: AsyncSession, notifier: TelegramNotifier, msg: dict, settings: Settings
 ) -> None:
@@ -454,6 +605,8 @@ async def process_message(
     is_owner = chat_id == str(settings.telegram_chat_id)
 
     text = (msg.get("text") or "").strip()
+    if is_owner and text and await _maybe_apply_edit(session, notifier, msg, text):
+        return
     if text.startswith("/"):
         if not is_owner:
             logger.warning("Ignoring command from non-owner chat %s.", chat_id)
@@ -472,9 +625,32 @@ async def process_message(
 # ─────────────────────────────── callback handler ────────────────────────────
 
 
-async def process_callback(session: AsyncSession, notifier: TelegramNotifier, cb: dict) -> None:
+async def process_callback(
+    session: AsyncSession,
+    notifier: TelegramNotifier,
+    cb: dict,
+    settings: Settings | None = None,
+) -> None:
     """Parse a Telegram callback query and route to approve or two-step reject."""
     data = cb.get("data", "")
+
+    # ── /distill proposal: the only callback that writes a file, so owner-gated ──
+    if data.startswith("distill:"):
+        settings = settings or get_settings()
+        _, _, rest = data.partition(":")
+        action, _, token = rest.partition(":")
+        if str(cb["message"]["chat"]["id"]) != str(settings.telegram_chat_id):
+            logger.warning("Ignoring distill callback from non-owner chat.")
+            return
+        if action == "apply":
+            label = distill.apply(token, settings)
+        elif action == "discard":
+            label = distill.discard(token)
+        else:
+            return
+        await notifier.mark_distilled(cb["message"], label)
+        await notifier.answer_callback(cb["id"], label)
+        return
 
     # ── Step 1: ❌ tap → show reason picker ──────────────────────────────────
     if data.startswith("reject:"):
@@ -524,9 +700,25 @@ async def process_callback(session: AsyncSession, notifier: TelegramNotifier, cb
         await notifier.mark_decided(cb["message"], post, reason=reason)
         logger.info(
             "callback post_id=%s decision=reject reason=%s status=%s toast=%r",
-            post_id, reason_str, post.status, toast,
+            post_id,
+            reason_str,
+            post.status,
+            toast,
         )
         await notifier.answer_callback(cb["id"], toast)
+        return
+
+    # ── ✏️ Fix: ask for the corrected caption ────────────────────────────────
+    if data.startswith("fix:"):
+        raw_id = data.removeprefix("fix:")
+        post = await session.get(Post, int(raw_id)) if raw_id.isdigit() else None
+        if post is None:
+            await notifier.answer_callback(cb["id"], "Post not found")
+        elif post.status not in _EDITABLE:
+            await notifier.answer_callback(cb["id"], f"Can't edit — {post.status}")
+        else:
+            await notifier.answer_callback(cb["id"], "✏️ Reply with the corrected caption")
+            await notifier.prompt_edit(cb["message"], post.id)
         return
 
     # ── Approve flow ──────────────────────────────────────────────────────────
@@ -552,7 +744,10 @@ async def process_callback(session: AsyncSession, notifier: TelegramNotifier, cb
 
     logger.info(
         "callback post_id=%s decision=%s status=%s toast=%r",
-        post_id, decision, post.status if post else None, toast,
+        post_id,
+        decision,
+        post.status if post else None,
+        toast,
     )
     await notifier.answer_callback(cb["id"], toast)
 

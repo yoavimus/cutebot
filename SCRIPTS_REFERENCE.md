@@ -76,13 +76,14 @@ python -m app.notifier.telegram delete-webhook
 ### Bot commands (owner-gated; work in dev and prod — M6)
 
 ```
-/status          counts by status, queue depth, stock counts, last 5 published
+/status          counts by status, queue depth, stock counts, learning counts, last 5 published
 /generate [N]    generate N suggestions now (default BATCH_SIZE) + DM for review
 /postnow [id]    publish front-of-queue, or a specific APPROVED post by id
 /queue           approved posts in queue order
 /pending         re-DM undecided suggestions (lost-DM recovery)
 /requeue <id>    move a FAILED post back into the queue
 /stock           unused / used / banned counts + banned list; /stock unban <file>
+/distill         propose a brand.md revision from recent feedback (✅ Apply / ❌ Discard)
 /help            this list (also /start)
 (photo DM)       save the photo into the stock library
 ```
@@ -93,6 +94,20 @@ The same list is registered with `setMyCommands` at startup, so Telegram's blue
 signal — plus **🚫 Ban image**, which also retires the photo from future batches
 (`banned_images` table; the file stays on disk so `/media` keeps serving). Images used
 by approved/published posts are never recycled; a short batch DMs a low-stock warning.
+
+**✏️ Fix** (M8.2) sits next to Approve/Reject (and on approved cards). Tap → the bot
+asks you to *reply* with the corrected Hebrew caption (prefix `en:` to fix the English
+instead). The reply approves a suggested post (an approved one keeps its queue spot),
+re-renders the card as `✅ Approved (edited)`, and writes a `Feedback` row with
+`edit_lang`/`edit_before`/`edit_after` — the strongest learning signal, fed back into
+generation by `app/learning.py`. Published/rejected posts refuse edits. No pending-edit
+state: the post id travels in the prompt text.
+
+**/distill** (M8.4, on demand only): one LLM call reads `brand.md` + the learning context
+(approved posts, edits, reject reasons) and DMs a unified diff + rationale. Nothing is
+written until ✅ Apply (owner-only), which first copies the file to `brand.md.bak`.
+Proposals live in memory — after a restart the buttons answer "expired, run /distill
+again"; Apply also refuses if `brand.md` changed since the proposal.
 
 ## Model eval (Hebrew quality bake-off)
 
@@ -105,6 +120,12 @@ by approved/published posts are never recycled; a short batch DMs a low-stock wa
 python -m scripts.eval_models                          # default candidate list
 python -m scripts.eval_models --models anthropic/claude-sonnet-5-5,openai/gpt-6.1-sol@high
 python -m scripts.eval_models --images 5 --out eval/eval_results.md
+
+# Learning A/B (M8): same model twice, without and with the real LearningContext built
+# from DATABASE_URL (point it at a prod snapshot for real feedback; read-only). The
+# header records examples/edits/recent/hint counts. ~$0.60 per 10-image pair on Opus.
+python -m scripts.eval_models --models anthropic/claude-opus-5-5 --images 10 --out eval/eval_plain.md
+python -m scripts.eval_models --models anthropic/claude-opus-5-5 --images 10 --learning --out eval/eval_learning.md
 
 # Render the results as a side-by-side HTML page (local, no upload; images load from
 # stock/ by relative path).
