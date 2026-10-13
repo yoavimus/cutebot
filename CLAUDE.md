@@ -5,13 +5,20 @@
 CuteBot — an autonomous, **human-in-the-loop social-media content pipeline** for small
 brands. On a schedule it drafts on-brand posts, DMs each to the owner via Telegram for
 one-tap Approve/Reject, queues approvals, and publishes to linked networks at fixed
-slots — learning from every decision. **`PRODUCT_SPEC.md` is the source of truth** for
-scope, architecture, and roadmap.
+slots — learning from every decision. **`docs/PRODUCT_SPEC.md` is the source of truth**
+for scope, architecture, and roadmap.
 
-v1 = the four-stage cycle (generate → review → queue → publish) with a single LLM
-agent, a Telegram review channel, and stubbed network publishers. Deferred to the
-roadmap (PRODUCT_SPEC §8): learning-loop v2, image generation, inline editing, more
-review channels, real publishers, analytics, multi-tenant.
+Shipped: the four-stage cycle in prod (Railway), Telegram operator console, Instagram
+publisher, learning loop v1 (M0–M8). Next: carousels (M9), then WhatsApp review
+channel, analytics, multi-tenant — `docs/ROADMAP.md`.
+
+## Docs layout
+
+All project docs live under `docs/` (only `README.md`, this file and tool configs stay
+at the root): `PRODUCT_SPEC.md` (truth), `ROADMAP.md` (sequencing), `DEV_GUIDELINES.md`
+(rules + model-decision log), `SCRIPTS_REFERENCE.md` (every command),
+`INSTAGRAM_RUNBOOK.md`, `brand.example.md`, `plans/` (active), `archive/` (shipped),
+`issues/` (owner feedback). Bare names like "DEV_GUIDELINES" elsewhere mean these files.
 
 ## AI / model strategy (runtime)
 
@@ -47,7 +54,7 @@ Agent completion messages MUST include Research/Plan/Changes/Reflect sections, a
 non-obvious findings MUST be persisted to memory (project or global). Never skip the
 memory step.
 
-## Developer guardrails (see DEV_GUIDELINES.md)
+## Developer guardrails (see docs/DEV_GUIDELINES.md)
 
 - **Approval gate is load-bearing** — the publish path may only act on `approved`
   posts. Never auto-approve, never publish from `suggested`.
@@ -56,7 +63,7 @@ memory step.
 - **Structured data over parsing** — LLM output is a validated schema.
 - **No secrets in code or logs.** All config via env (`app/config.py`).
 - **Refactor responsibly** — DB shape change ⇒ migration; new dep ⇒ update
-  `requirements.txt` *and* `pyproject.toml`. New script ⇒ update `SCRIPTS_REFERENCE.md`.
+  `requirements.txt` *and* `pyproject.toml`. New script ⇒ update `docs/SCRIPTS_REFERENCE.md`.
 - **Test before moving on** — `ruff check . && mypy app && pytest`.
 
 ## Local dev (WSL2 / Linux, zsh)

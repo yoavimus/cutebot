@@ -124,7 +124,7 @@ async def run(models: list[str], n_images: int, out: str, use_learning: bool = F
     lines.insert(5, "")
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     Path(out).write_text("\n".join(lines), encoding="utf-8")
-    print(f"\nWrote {out} — review side-by-side and record the decision in DEV_GUIDELINES.md.")
+    print(f"\nWrote {out} — review side-by-side and record the decision in docs/DEV_GUIDELINES.md.")
 
 
 def main() -> None:

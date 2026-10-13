@@ -137,7 +137,7 @@ python -m scripts.eval_to_html --embed --out eval/eval_comparison_shareable.html
 
 Standing task — re-run after each provider release, review natively, record the
 decision in `DEV_GUIDELINES.md` ("Model decision"); if the winner changes, update
-`PRODUCT_SPEC.md` §3 + `CLAUDE.md` + `env.example` + the config default together.
+`PRODUCT_SPEC.md` §3 + `../CLAUDE.md` + `../env.example` + the config default together.
 A model id LiteLLM doesn't price yet shows `cost ?` — bump `litellm` in requirements.txt.
 
 ## Quality gates

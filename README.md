@@ -40,7 +40,7 @@ future suggestions.
 - **Database**: PostgreSQL (async)
 - **Deployment**: any container host (Railway-friendly)
 
-`PRODUCT_SPEC.md` is the **source of truth** for scope, architecture, and roadmap.
+`docs/PRODUCT_SPEC.md` is the **source of truth** for scope, architecture, and roadmap.
 
 ## Quickstart
 
@@ -52,7 +52,7 @@ uv pip install -r requirements.txt
 
 # 2. Configure
 cp env.example .env        # then fill in ANTHROPIC_API_KEY, DATABASE_URL, TELEGRAM_*
-cp brand.example.md brand.md                              # then write your brand voice
+cp docs/brand.example.md brand.md                         # then write your brand voice
 mkdir -p stock && cp /path/to/your/images/*.jpg stock/   # drop in your stock images
 
 # 3. Run the API + scheduler
@@ -62,7 +62,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8002
 Health check: `curl -s http://127.0.0.1:8002/health` → `{"status":"ok"}`.
 
 See the `run` Claude skill (`.claude/skills/run/SKILL.md`) for the full local
-startup, including Telegram webhook setup, or `SCRIPTS_REFERENCE.md` for the script
+startup, including Telegram webhook setup, or `docs/SCRIPTS_REFERENCE.md` for the script
 inventory.
 
 ## Status
@@ -82,16 +82,16 @@ with your approved posts, ✏️ Fix corrections and reject reasons as context, 
 
 | File | What it's for |
 |------|---------------|
-| `PRODUCT_SPEC.md` | **Source of truth** — scope, architecture, data model, post-v1 items |
-| `ROADMAP.md` | Sequencing: shipped milestones (index to archived plans), next, backlog |
-| `DEV_GUIDELINES.md` | Engineering rules learned on the project + the runtime-model decision log |
-| `SCRIPTS_REFERENCE.md` | Every command: run, bot commands, eval, deploy, DB |
+| `docs/PRODUCT_SPEC.md` | **Source of truth** — scope, architecture, data model, post-v1 items |
+| `docs/ROADMAP.md` | Sequencing: shipped milestones (index to archived plans), next, backlog |
+| `docs/DEV_GUIDELINES.md` | Engineering rules learned on the project + the runtime-model decision log |
+| `docs/SCRIPTS_REFERENCE.md` | Every command: run, bot commands, eval, deploy, DB |
 | `CLAUDE.md` | Instructions for Claude Code sessions in this repo |
 | `docs/INSTAGRAM_RUNBOOK.md` | Meta app / token setup and renewal (owner-side, living) |
 | `docs/plans/` | The active milestone plan (`<ticket>.md`); empty between milestones |
 | `docs/archive/` | Shipped milestone plans (M0–M8), the post-v1 review, the M8 kickoff prompt |
 | `docs/issues/` | Owner issue lists and the findings/decisions written against them |
-| `brand.example.md` | Template for the gitignored `brand.md` the generator reads |
+| `docs/brand.example.md` | Template for the gitignored `brand.md` the generator reads |
 
 ## License
 
