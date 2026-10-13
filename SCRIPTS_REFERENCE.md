@@ -161,7 +161,7 @@ pytest -m live        # live integration tests (requires ANTHROPIC_API_KEY in en
    ```bash
    # SSH into the container once (railway run) or use the Railway shell:
    mkdir -p /data/stock
-   # scp or upload brand.yaml + stock images into /data/
+   # upload brand.md + stock images into /data/ (photos DM'd to the bot land there too)
    ```
 
 3. Set Railway service variables (Settings → Variables):
@@ -171,7 +171,8 @@ pytest -m live        # live integration tests (requires ANTHROPIC_API_KEY in en
    HOST=0.0.0.0
    DATABASE_URL=${{Postgres.DATABASE_URL}}
    ANTHROPIC_API_KEY=<key>
-   DEFAULT_LLM_MODEL=anthropic/claude-sonnet-4-6
+   DEFAULT_LLM_MODEL=anthropic/claude-opus-5-5   # eval winner — DEV_GUIDELINES "Model decision"
+   # LLM_MAX_TOKENS / LLM_REASONING_EFFORT / LEARNING_* have sane defaults — see env.example
    TELEGRAM_BOT_TOKEN=<token>
    TELEGRAM_CHAT_ID=<chat_id>
    TELEGRAM_WEBHOOK_BASE=https://<your-service>.up.railway.app
@@ -183,7 +184,7 @@ pytest -m live        # live integration tests (requires ANTHROPIC_API_KEY in en
    POSTING_SLOTS=12:00,18:00   # when to publish approved posts (HH:MM in SCHEDULE_TZ)
    SCHEDULE_TZ=Asia/Jerusalem  # IANA timezone for both (default; DST-safe)
    # Instagram (M7) — leave unset to keep the logging stub active:
-   INSTAGRAM_ACCESS_TOKEN=<long-lived token — see docs/M7_INSTAGRAM_RUNBOOK.md>
+   INSTAGRAM_ACCESS_TOKEN=<long-lived token — see docs/INSTAGRAM_RUNBOOK.md>
    INSTAGRAM_IG_USER_ID=<IG Business account id>
    PUBLIC_BASE_URL=https://<your-service>.up.railway.app   # usually = TELEGRAM_WEBHOOK_BASE
    ```

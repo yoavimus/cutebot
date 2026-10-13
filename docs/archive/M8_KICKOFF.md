@@ -1,4 +1,8 @@
-# M8 kickoff prompt
+# M8 kickoff prompt (archived — M8 shipped 2026-10-13)
+
+Kept as the template for the next unattended milestone session: swap the plan path,
+ticket ids and the migration number, keep the gates. Paths below are as they were at
+the time (`docs/plans/M8_PLAN.md` is now `docs/archive/M8_PLAN.md`).
 
 Paste everything below the line into a fresh Claude Code session (Sonnet) started in
 `~/Projects/cutebot`. It is written to run unattended until the M8 tickets are done.

@@ -1,209 +1,47 @@
 # CuteBot — Build Roadmap
 
-> **Delivery plan** from the current skeleton to a shipped v1 and beyond. This is the
-> *sequencing* doc; `PRODUCT_SPEC.md` remains the source of truth for *what* CuteBot is.
-> When scope changes, change the spec first, then resequence here.
+> **Sequencing** doc: what shipped, what's next, what's parked. `PRODUCT_SPEC.md` is the
+> source of truth for *what* CuteBot is — when scope changes, change the spec first,
+> then resequence here. Active milestone plans live in `docs/plans/<ticket>.md` and move
+> to `docs/archive/` when shipped.
 
 ## Locked decisions
 
-- **Captioning = vision.** Generation passes the actual stock image to Claude
-  (multimodal); the caption is grounded in what the model genuinely sees, not in a
-  filename or tags. (PRODUCT_SPEC §3.)
-- **v1 "done" = prove the loop.** v1 ships the full generate→review→queue→publish cycle
-  deployed and autonomous, with **stub** publishers. The first *real* network is the
-  first post-v1 item (M-E). Telegram review is real from M0.
-- **Bilingual (Hebrew-first) + mandatory disclaimer.** Every post is generated in Hebrew
-  (primary) and English, stored as `caption_he`/`caption_en`; Hebrew quality is a hard
-  gate. A cute, configurable CuteBot disclaimer is auto-appended **in code** to every
-  post (review + publish). Language set is config-driven (default `he`+`en`); changing
-  the primary is deferred. (PRODUCT_SPEC §1, §3, §7.)
+- **Captioning = vision.** Generation passes the actual stock image to the model
+  (multimodal); the caption is grounded in what it sees, not in a filename. (PRODUCT_SPEC §3.)
+- **Bilingual (Hebrew-first) + mandatory disclaimer.** `caption_he` / `caption_en`,
+  Hebrew quality is a hard gate; the disclaimer is appended **in code** at review and
+  publish. (PRODUCT_SPEC §1, §3, §7.)
+- **Runtime model is picked by eval, not opinion.** `scripts/eval_models.py` bake-off,
+  native Hebrew review by the owner, re-run after each provider release. Current:
+  Claude Opus 5.5 (DEV_GUIDELINES "Model decision" has the history).
 
-## Current state (skeleton — green)
+## Shipped
 
-The four-stage loop is fully wired and passes ruff/mypy/pytest/CI: config, async DB,
-models (`Post`/`Batch`/`Feedback`), the `app/llm.py` seam (real LiteLLM call + offline
-stub), all four pipeline stages, APScheduler (generation cron + posting slots), the
-Telegram notifier (text DM, inline Approve/Reject, webhook **and** polling), and
-logging-stub publishers for IG/TikTok/X.
+Each milestone's full plan + checklist is archived under `docs/archive/`; this table is
+the index. Details of what each one changed live in those plans and in git.
 
-**The gap:** the spec is now *image-first off a stock library*; the code still does
-text-only generation. `Post` has no `image_ref`, there's no `STOCK_IMAGES_DIR`,
-`generate.py` never touches an image, and Telegram sends text not a photo. Closing this
-is M0.
-
----
-
-## M0 — Image-first generation (close the spec↔code gap)
-
-> Shipped ✅ — plan archived at **`docs/archive/M0_PLAN.md`**.
-
-The headline of v1. Reorder generation to *image → caption* with vision.
-
-- [x] `Post`: add `image_ref`, `caption_he`, `caption_en` (replacing the single
-      `caption`); introduce **Alembic** and write the first migration.
-- [x] Config + `env.example`: `STOCK_IMAGES_DIR`, `PRIMARY_LANGUAGE` (default `he`),
-      `SECONDARY_LANGUAGES` (default `en`), `POST_DISCLAIMER` (cute bilingual default).
-- [x] `app/stock.py` — enumerate the stock library, pick an unused image per post.
-- [x] `app/disclaimer.py` — compose the disclosure line from the template; one helper
-      used by both review and publish so the guarantee lives in one place.
-- [x] Rework `app/llm.py`: take an image, return `caption_he`/`caption_en`/
-      `visual_concept`/`rationale` via a **multimodal** Claude call; prompt demands
-      native-quality Hebrew (primary) + English; offline stub returns both languages.
-- [x] `generate.py`: select image → caption it (bilingual) → persist with `image_ref`.
-- [x] `app/schemas.py`: `PostSuggestion` carries `caption_he`/`caption_en`; input carries
-      the chosen image.
-- [x] Telegram `sendPhoto` (image + Hebrew & English caption + disclaimer +
-      Approve/Reject) so the reviewer sees the real, final post.
-- [x] Publishers compose the final caption (he + en + disclaimer) and carry `image_ref`
-      through `publish()` (stubs log it).
-- [x] Tests: image-first path; **assert the disclaimer is present** on every rendered and
-      published caption; assert both language fields are populated. Keep the suite offline.
-
-**DoD:** `/dev/generate` produces posts each bound to a real stock image with a
-vision-grounded **Hebrew + English** caption; the Telegram DM shows that photo with both
-languages and the disclaimer. ruff/mypy/pytest green.
-
-## M1 — Real generation, validated ✅
-
-> Shipped ✅ — plan archived at **`docs/archive/M1_PLAN.md`**.
-
-- [x] Run against a live API key; verify multimodal output + structure.
-- [x] **Hebrew quality gate** — native review of a real batch; Hebrew reads naturally,
-      not translated; English matches in voice. GPT-4o cleared the gate in comparison
-      testing; **runtime model still open** (config default stays Claude Sonnet) — see
-      DEV_GUIDELINES "Model decision".
-- [x] Realistic `brand.yaml`; prompt tuning for voice + hard-rule adherence.
-- [x] `llm.py`: retries, timeout, `max_tokens`/cost guardrails, graceful failure.
-- [x] Image rotation/dedup so the pool cycles before reuse.
-
-**DoD:** a real batch reads cleanly on-brand in **native-quality Hebrew + English** with
-the disclaimer present, against a sample stock library; failures degrade gracefully.
-
-## M2 — Review loop hardening
-
-> Shipped ✅ — plan archived at **`docs/archive/M2_PLAN.md`**.
-
-- [x] Real approve/reject round-trip against a test chat (photo message → callback → state).
-- [x] Edit the message on decision ("✅ Approved" / "❌ Rejected"), buttons removed.
-- [x] Edge cases: expired buttons (graceful), unknown post ("Post not found"), double-tap ("Already …").
-- [x] Structured logging across the webhook + decision path.
-
-**DoD:** a human can clear a full batch from Telegram; every decision is a `Feedback` row
-and the message reflects the outcome.
-
-## M3 — End-to-end dry run
-
-> Shipped ✅ — plan archived at **`docs/archive/M3_PLAN.md`**.
-
-- [x] Confirm posting slots fire and drain front-of-queue in order (test-verified).
-- [x] Crash recovery: `recover_orphaned` sweeps `PUBLISHING` on startup; `requeue` + `/dev/requeue/{id}` for `FAILED` posts.
-- [x] Publishers still stubs, carrying the image.
-- [x] **Manual dry run** (CUT-28): real slot, real SQLite, approve via Telegram → publish in order; kill mid-publish → restart recovers; fail → requeue → publish.
-
-**DoD:** an approved post flows from queue to (stub) publish at a real slot, once, with
-correct state transitions; a crash mid-publish self-heals, never double-posts.
-
-## M4 — Ship v1 to Railway
-
-> Shipped ✅ & **verified in prod** — plan archived at **`docs/archive/M4_PLAN.md`**.
-
-- [x] Postgres URL normalization (`app/db.py`: coerces `postgresql://`/`postgres://` → `+asyncpg`).
-- [x] `Procfile` + `railway.toml`: `alembic upgrade head && uvicorn … --host 0.0.0.0 --port $PORT`.
-- [x] Webhook auto-registered on prod startup; env inventory documented in `env.example`.
-- [x] Railway provisioned: Postgres plugin + persistent volume (`/data`), all env vars set.
-- [x] `/health` green; dev routes 404 in prod; generation fired; Telegram approval via real webhook confirmed.
-- [x] **Posting slot → stub-publish confirmed in prod** (CUT-34): post 1 went
-      `suggested → approved → published` (published_at `2026-07-07 18:49:00`), verified via
-      `railway connect Postgres` (scheduler is the only publish trigger in prod).
-
-**DoD:** the loop runs autonomously in production with stub publishers — **v1 shipped ✅.**
-
-## M5 — Post-v1 usability & operability
-
-> Shipped ✅ — tickets CUT-35 through CUT-41.
-
-- [x] **M5.1** — brand file switched from YAML to Markdown (`brand.example.md`; config default + `env.example` updated; code was already `read_text` verbatim).
-- [x] **M5.2** — `GET /dev/status` (20 most-recent posts, optional `?status=` filter); `POST /dev/run-cycle` (generate→auto-approve→publish in one call); `/dev/generate` and `/dev/publish-next` return full post objects instead of just IDs.
-- [x] **M5.3** — `select_images` uses `random.sample`; only images tied to APPROVED/PUBLISHING/PUBLISHED posts are blocked — rejected/suggested images are free again.
-- [x] **M5.4** — `handle_decision` allows APPROVED↔REJECTED flips (each writes a Feedback row); PUBLISHING/PUBLISHED hard-blocked. Telegram `mark_decided` leaves the opposite button until a post publishes.
-- [x] **M5.5** — `GENERATION_CRON` and `POSTING_SLOTS` documented in `env.example` and `SCRIPTS_REFERENCE.md` (edit + redeploy; times are UTC).
-- [x] **M5.6** — Telegram `/status` command: DM the bot `/status` → counts by status, queue depth, last 5 published posts. Owner-gated; works via webhook and long-poll. Makes prod state visible without DB access.
-
-**DoD:** pipeline is pleasant to operate — status visible in one curl (dev) or Telegram `/status` (prod), decisions reversible, images random, brand file editable by non-technical owners.
-
-## M6 — Operator console & feedback signal
-
-> Shipped ✅ 2026-07-09 — implemented as tickets CUT-50…54 (+ CUT-47 catch-up follow-up);
-> plan archived at **`docs/archive/M6_PLAN.md`**. Deployed & dry-run verified in prod.
-
-- [x] **Telegram operator console** — `/generate [N]`, `/postnow [id]` (front-of-queue
-      or a specific **approved** post; gate untouched), `/queue`, `/requeue <id>`,
-      `/pending` (re-DMs undecided posts — lost-DM recovery), `/status`, and photo
-      upload → stock library. All owner-gated.
-- [x] **Reject reasons** — two-step ❌ flow with chips (voice / hebrew / image / boring
-      + skip); `Feedback.reason` column (migration 0003) — the training signal M8 needs.
-- [x] **Timezone-aware schedule** — `SCHEDULE_TZ` (default `Asia/Jerusalem`), DST-safe.
-- [x] **Reliability** — posting-slot `misfire_grace_time` + startup catch-up
-      (`CATCHUP_WINDOW_MIN`) so a deploy straddling a slot can't skip it; review-DM
-      send failures logged.
-
-**DoD:** every pipeline operation reachable from Telegram; rejections carry reasons;
-slots run in Israel time and survive restarts — **verified via prod dry run.**
-
-## M7 — First real publisher: Instagram
-
-> Shipped ✅ — code 2026-07-14 (tickets CUT-56…60), **live on Instagram 2026-10-05**
-> (CUT-61: Meta approval + prod smoke, test post published and deleted). Plan archived
-> at `docs/archive/M7_PLAN.md`. Without creds, `get_publishers()` falls back to the
-> Instagram stub automatically.
-
-- [x] **M7.1** — real Instagram Graph adapter (`app/publishers/instagram.py`):
-      container create → poll `status_code` → `media_publish`; image-spec validation
-      (JPEG-served, 320–1440px, 4:5–1.91:1 aspect, ≤8MB) before any Graph call.
-- [x] **M7.2** — `GET /media/{image_ref:path}` (not dev-gated) serves stock images as
-      JPEG via Pillow, resolved path-traversal-safe under `stock_images_dir`.
-- [x] **M7.3 (load-bearing)** — migration `0004` adds `Post.ig_container_id` /
-      `ig_media_id`; `Publisher.publish` gains a `session` param so the adapter can
-      commit progress markers mid-flight; `recover_orphaned` is network-aware — a
-      confirmed `ig_media_id` is never reset to APPROVED (would double-post), an
-      ambiguous container status goes to FAILED + a Telegram alert instead of
-      auto-republishing.
-- [x] **M7.4** — config: `INSTAGRAM_IG_USER_ID`, `INSTAGRAM_GRAPH_VERSION`,
-      `PUBLIC_BASE_URL`; real adapter activates only when both the token and IG user
-      id are set, else the stub runs (dev/test unaffected).
-- [x] **M7.5** — offline Graph-mock tests (happy path, error mapping, out-of-spec
-      image, container-resume idempotency) + the crash-recovery tests proving a
-      restart after `media_publish` never re-publishes.
-- [x] **M7.6** — Meta app + Instagram Graph product, Business Verification, App
-      Review (`instagram_basic`, `instagram_content_publish`, `pages_show_list`,
-      `pages_read_engagement`), long-lived token, prod smoke (CUT-61) — done
-      2026-10-05: a real post went live on the owner's Instagram and was deleted after.
-
-Carousel/multi-image graduated to **M9** below.
-
-**DoD:** a real Instagram post from the pipeline — **met 2026-10-05.**
+| Milestone | What | Shipped | Plan |
+|-----------|------|---------|------|
+| M0 — Image-first generation | `Post.image_ref` + bilingual captions, Alembic, `app/stock.py`, disclaimer in code, vision captioning, Telegram photo cards | 2026-07 | `docs/archive/M0_PLAN.md` |
+| M1 — Real generation, validated | live API, Hebrew quality gate, `brand.*` file, retries/timeouts, image rotation | 2026-07 | `docs/archive/M1_PLAN.md` |
+| M2 — Review loop hardening | approve/reject round-trip, card edit on decision, expired/unknown/double-tap edge cases, structured logging | 2026-07 | `docs/archive/M2_PLAN.md` |
+| M3 — End-to-end dry run | slots drain in order, `recover_orphaned`, `requeue`, manual dry run (CUT-28) | 2026-07 | `docs/archive/M3_PLAN.md` |
+| M4 — Ship v1 to Railway | Postgres, `Procfile`/`railway.toml`, webhook auto-register, **v1 live in prod** (CUT-34) | 2026-07-07 | `docs/archive/M4_PLAN.md` |
+| M5 — Usability & operability | `brand.md` (was YAML), `/dev/status` + `/dev/run-cycle`, random image pick, reversible decisions, `/status` (CUT-35…41) | 2026-07 | `docs/issues/M5_ISSUES.md` |
+| M6 — Operator console & feedback signal | `/generate` `/postnow` `/queue` `/requeue` `/pending`, photo→stock, reject-reason chips (`Feedback.reason`), `SCHEDULE_TZ`, slot catch-up (CUT-50…54) | 2026-07-09 | `docs/archive/M6_PLAN.md` |
+| M7 — Instagram publisher | Graph adapter with container-resume + network-aware recovery, `/media` route, Meta approval, **first real post** (CUT-56…61) | 2026-10-05 | `docs/archive/M7_PLAN.md`, `docs/INSTAGRAM_RUNBOOK.md` |
+| Owner review round | `/help` + command menu, `/stock` + 🚫 Ban image, no stock recycling, eval cost column | 2026-10-05 | `docs/issues/cutebot_issues_05_10_2026*.md` |
+| M8 — Learning loop v1 | `app/learning.py` context in every caption, ✏️ Fix (edit = strongest signal, migration 0006), `--learning` eval flag, `/distill` brand proposals (CUT-63…67) | 2026-10-13 | `docs/archive/M8_PLAN.md` |
 
 ---
 
-## Post-v1 (decided 2026-07-08 — see `docs/POST_V1_REVIEW.md` for the reasoning)
+## Next (order decided 2026-07-08 — `docs/archive/POST_V1_REVIEW.md` has the reasoning)
 
-Standing task (not a milestone): **model eval** — `scripts/eval_models.py` bake-off,
-native Hebrew review by the owner. Rounds 1–3 (2026-10-05/06) → **Claude Opus 5.5** is
-the runtime default (DEV_GUIDELINES "Model decision" has the history). Candidates take
-`@effort`; cost per post is in the header. Re-run after each provider release.
+Open owner step from M8: the paid learning A/B (`eval_models --learning` vs plain on
+Opus 5.5 against a prod snapshot) — verdict goes in DEV_GUIDELINES "Model decision".
 
-Owner review 2026-10-05: `docs/issues/cutebot_issues_05_10_2026.md` + findings (items
-1–9). Shipped the same day: Telegram command menu + `/help`, `/stock` + "🚫 Ban image"
-reject chip, no stock recycling, eval cost column.
-
-1. **M8 — learning loop v1** — **built 2026-10-07, PR open (not yet deployed)**: plan
-   `docs/archive/M8_PLAN.md`, epic CUT-63, tickets CUT-64…67.
-   - [x] **M8.1** (CUT-64) — `app/learning.py` context into `caption_image`.
-   - [x] **M8.2** (CUT-65) — ✏️ Fix button + migration `0006`.
-   - [x] **M8.3** (CUT-66) — `--learning` eval flag + `/status` line; the paid A/B page
-     is owner-run (`--learning` against a prod snapshot).
-   - [x] **M8.4** (CUT-67) — `/distill` brand distillation (`app/distill.py`).
-2. **M9 — Carousel posts** (graduated from backlog 2026-10-05):
+1. **M9 — Carousel posts** (graduated from backlog 2026-10-05):
    - Storage: JSON list column `image_refs` on `Post` (one migration; `image_ref`
      stays as the cover). A join table only when slides need per-slide captions.
    - Generation: 3–5 unused images in one vision call → connecting story + one caption.
@@ -213,7 +51,7 @@ reject chip, no stock recycling, eval cost column.
      existing container-resume/idempotency path extends to it.
    - **First task: a `## Carousels` section in `brand.md` with 2–3 sample stories** —
      the prompt can't be written without knowing what a good one looks like.
-3. **Later, relative order unchanged:** D — more review channels (re-aimed at
+2. **Later, relative order unchanged:** D — more review channels (re-aimed at
    **WhatsApp Business** for the Israeli market, not Discord/Slack) → F — analytics
    feedback → G — multi-tenant.
 

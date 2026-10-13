@@ -45,7 +45,10 @@ double-post. Only `ok` → `published`; failure → `failed` (re-queueable later
   "Model decision" below). For LLM/API questions, read the `claude-api` skill — don't
   answer model questions from memory.
 - Keep prompts in `app/llm.py` (or a `prompts/` dir if they grow). Brand guidelines
-  are injected verbatim from `brand.yaml`.
+  are injected verbatim from `brand.md` (`BRAND_FILE`); the learning context from
+  `app/learning.py` is appended after them.
+- `brand.md` is the owner's gitignored live file. Code never writes it except
+  `app/distill.py` after an explicit ✅ in Telegram (with a `.bak` first).
 
 ## Code quality
 
@@ -55,17 +58,15 @@ double-post. Only `ok` → `published`; failure → `failed` (re-queueable later
 - After editing nested async code, re-run mypy — async SQLAlchemy typing bites.
 - No secrets in code or logs. Scrub tokens from any debug output.
 
-## Hebrew quality gate (M1)
+## Hebrew quality gate
 
 The LLM must produce **native-quality Hebrew** — written in Hebrew, not translated from English.
 Signals of failure: calque phrasing, wrong gender/number agreement, unnatural word order, RTL
 punctuation mis-placed.
 
-**Levers (in order):**
-1. Prompt emphasis: "write Hebrew first, then render English to match — do not translate".
-2. Brand-voice examples in `brand.yaml` with actual Hebrew sample posts.
-3. If Sonnet fails after prompt tuning → try `anthropic/claude-opus-4-8` and record the
-   cost/quality trade-off here before changing the default.
+**Levers (in order):** prompt emphasis ("write Hebrew first, then render English to
+match — do not translate") → Hebrew sample posts in `brand.md` → approved examples and
+owner edits via the learning context → model choice (below).
 
 **Model decision — process decided 2026-07-08; current pick 2026-10-06: Claude Opus 5.5.**
 The choice is made empirically with `scripts/eval_models.py`: same stock images × same
@@ -81,7 +82,7 @@ side-by-side by the owner (native Hebrew speaker). History:
 - **M8 learning A/B** (Opus 5.5, `--learning` vs not, 10 images): _pending — owner runs it
   against a prod snapshot and records the verdict here._
 Standing: re-run after each provider release (candidates take `@effort`), record here.
-(Background: docs/POST_V1_REVIEW.md §3.1; owner notes
+(Background: docs/archive/POST_V1_REVIEW.md §3.1; owner notes
 docs/issues/cutebot_issues_05_10_2026_findings.md §6.)
 
 ## RPER

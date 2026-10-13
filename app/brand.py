@@ -25,7 +25,7 @@ def load_brand(path: str | None = None) -> str:
     """Return the brand guidelines as raw text.
 
     Falls back to a small built-in default so the pipeline runs out of the box
-    before a real ``brand.yaml`` exists.
+    before a real ``brand.md`` exists.
     """
     brand_path = Path(path or get_settings().brand_file)
     if brand_path.exists():

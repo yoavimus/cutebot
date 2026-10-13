@@ -107,10 +107,14 @@ external worker in v1 — the scheduler runs in the app process.
   written to match it. The AI-disclosure line is **not** stored per row; it's composed
   from the configured template at review/publish time so one edit updates every post.
   Image *generation* is out of scope (see §3, §8.B).
-- **Feedback** — `id, post_id, decision (approve|reject), created_at` — the training
-  signal. Future: free-text reason, edit deltas.
+- **Feedback** — `id, post_id, decision (approve|reject), reason, edit_lang,
+  edit_before, edit_after, created_at` — the training signal. `reason` is the one-tap
+  reject chip; the `edit_*` triple records an owner correction (✏️ Fix), the strongest
+  signal. `app/learning.py` turns this table into the context fed to every caption.
 - **Batch** — `id, created_at, brand_snapshot, model, size` — provenance for a
   generation run.
+- **BannedImage** — `image_ref, banned_at` — stock images retired from future batches
+  (🚫 Ban image); the file stays on disk.
 
 ## 5. Stack
 
@@ -124,8 +128,9 @@ external worker in v1 — the scheduler runs in the app process.
 ## 6. Configuration
 
 All via env (`app/config.py`, `pydantic-settings`). See `env.example`. Brand
-guidelines live in a `brand.yaml` file (see `brand.example.yaml`) and are injected
-into the generation prompt verbatim. The owner-provided stock images live in a
+guidelines live in a Markdown file (`BRAND_FILE`, default `brand.md`; template
+`brand.example.md`) and are injected into the generation prompt verbatim; `/distill`
+can propose revisions to it from accumulated feedback, applied only after an explicit ✅. The owner-provided stock images live in a
 configured directory (`STOCK_IMAGES_DIR`); generation picks an image from this library
 first (setting `image_ref`), then writes the caption to match it (see §3).
 
@@ -152,24 +157,27 @@ disclosure wording.
 > Delivery sequencing (the path to v1 and the order of the items below) lives in
 > **`ROADMAP.md`**. This section defines the items; that doc schedules them.
 
-Deferred — not in v1, in rough priority order:
+Items defined at v1 (2026-07), with status:
 
-- **A. Learning loop** — **shipped in M8** (`app/learning.py`; v2 = distillation, M8.4/M10). Original scope: fine-tune the prompt from accumulated `Feedback`
-  (few-shot selection of past approvals; learn from rejections).
+- **A. Learning loop** — **shipped (M8)**: `app/learning.py` feeds approved examples,
+  owner corrections, reject hints and recent posts into every caption; `/distill`
+  proposes `brand.md` revisions from the same evidence.
 - **B. Image generation** — *deferred for the foreseeable future.* v1 is image-first off
   the owner's stock library (§3). This item would reintroduce a text-first path: generate
   a caption, then synthesize a matching image from `visual_concept` (e.g. an image model)
-  instead of selecting from stock.
-- **C. Inline editing** — **shipped in M8** (✏️ Fix). "Approve with edits" in Telegram; capture the edit as a
-  stronger training signal than approve/reject.
-- **D. More review channels** — Discord and Slack notifier adapters.
-- **E. Real publishers** — implement Instagram Graph, TikTok, and X adapters with
-  OAuth + media upload (replacing the v1 stubs).
+  instead of selecting from stock. A widened variant (generated scenes from a brand
+  design) sits in the ROADMAP backlog.
+- **C. Inline editing** — **shipped (M8)**: ✏️ Fix in Telegram; the edit is stored on
+  `Feedback` as the strongest training signal.
+- **D. More review channels** — next adapter re-aimed at **WhatsApp Business** (Israeli
+  market); Discord/Slack only if asked for.
+- **E. Real publishers** — **Instagram shipped (M7)**; TikTok and X remain stubs.
+  **Carousel posts** (multi-image, IG `CAROUSEL` container) are the next publisher
+  item — M9 in ROADMAP.
 - **F. Analytics feedback** — pull post performance back in as a generation signal.
 - **G. Multi-brand / multi-tenant** — scope everything by `brand_id`.
 
-## 9. Out of scope (v1)
+## 9. Out of scope
 
-Multi-tenant, web dashboard, **image generation** (v1 uses an owner-provided stock
-library instead — §3), real network publishing, analytics, payment, and per-post
-scheduling beyond fixed daily slots.
+Web dashboard, payment, per-post scheduling beyond fixed daily slots, and AI image
+generation (§3, §8.B). Multi-tenant and analytics are roadmap items (§8.F/G), not v1.

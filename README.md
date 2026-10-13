@@ -74,7 +74,24 @@ one-tap reject reasons, a full operator console over Telegram commands
 (`/generate`, `/postnow`, `/queue`, `/pending`, `/requeue`, `/stock`, `/status`,
 `/help`, photo upload → stock), and timezone-aware scheduled publishing.
 **Instagram publishing is live** (Graph API, first real post 2026-10-05); TikTok / X
-remain logging stubs. See `ROADMAP.md` for sequencing and `PRODUCT_SPEC.md` for scope.
+remain logging stubs. **Learning loop v1** (2026-10-13): every caption is generated
+with your approved posts, ✏️ Fix corrections and reject reasons as context, and
+`/distill` proposes brand-file revisions from the same evidence.
+
+## Docs map
+
+| File | What it's for |
+|------|---------------|
+| `PRODUCT_SPEC.md` | **Source of truth** — scope, architecture, data model, post-v1 items |
+| `ROADMAP.md` | Sequencing: shipped milestones (index to archived plans), next, backlog |
+| `DEV_GUIDELINES.md` | Engineering rules learned on the project + the runtime-model decision log |
+| `SCRIPTS_REFERENCE.md` | Every command: run, bot commands, eval, deploy, DB |
+| `CLAUDE.md` | Instructions for Claude Code sessions in this repo |
+| `docs/INSTAGRAM_RUNBOOK.md` | Meta app / token setup and renewal (owner-side, living) |
+| `docs/plans/` | The active milestone plan (`<ticket>.md`); empty between milestones |
+| `docs/archive/` | Shipped milestone plans (M0–M8), the post-v1 review, the M8 kickoff prompt |
+| `docs/issues/` | Owner issue lists and the findings/decisions written against them |
+| `brand.example.md` | Template for the gitignored `brand.md` the generator reads |
 
 ## License
 
