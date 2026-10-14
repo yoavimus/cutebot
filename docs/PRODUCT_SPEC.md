@@ -169,11 +169,15 @@ Items defined at v1 (2026-07), with status:
   design) sits in the ROADMAP backlog.
 - **C. Inline editing** — **shipped (M8)**: ✏️ Fix in Telegram; the edit is stored on
   `Feedback` as the strongest training signal.
-- **D. More review channels** — next adapter re-aimed at **WhatsApp Business** (Israeli
-  market); Discord/Slack only if asked for.
-- **E. Real publishers** — **Instagram shipped (M7)**; TikTok and X remain stubs.
-  **Carousel posts** (multi-image, IG `CAROUSEL` container) are the next publisher
-  item — M9 in ROADMAP.
+- **D. More review channels** — Telegram stays the review channel; WhatsApp only as an
+  owner notification channel if a beta brand needs it. Discord/Slack only if asked for.
+- **E. Real publishers** — **Instagram shipped (M7)**; Instagram-only until a brand asks
+  for another network (X is pay-per-use and cheap; the work is per-network captions).
+  **Carousel posts** (IG `CAROUSEL` container) are the next publisher item.
+- **H. Instagram DM assistant** (added 2026-10-14) — replies to customer DMs/comments
+  from a brand DM-guidelines section: auto-answer only with a cited guideline, otherwise
+  draft to the owner for ✅/✏️/❌ within Meta's 24h window, escalate when a human is
+  needed. Same human-in-the-loop principle as posts.
 - **F. Analytics feedback** — pull post performance back in as a generation signal.
 - **G. Multi-brand / multi-tenant** — scope everything by `brand_id`.
 

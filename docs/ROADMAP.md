@@ -36,28 +36,48 @@ the index. Details of what each one changed live in those plans and in git.
 
 ---
 
-## Next (order decided 2026-07-08 — `docs/archive/POST_V1_REVIEW.md` has the reasoning)
+## Next (order decided 2026-10-14 — owner list + discussion in
+`docs/issues/next_steps_13_10_2026.md`; Instagram-only until a brand asks for another network)
 
-Open owner step from M8: the paid learning A/B (`eval_models --learning` vs plain on
-Opus 5.5 against a prod snapshot) — verdict goes in DEV_GUIDELINES "Model decision".
+| # | Milestone | What ships | Size |
+|---|-----------|------------|------|
+| M9 | **Bot console v2** | reply keyboard + HTML output; `/schedule` (generation cron + posting slots from the bot, env stays the default); `/mode learning` + per-post `📚 Keep` (approved for learning only — new `kept` status, never queued); `🤏 Almost` verdict with optional reason chips + `🔁 Retry` on the same image; near-miss block in the learning context | 1 wk |
+| M10 | **Tenant seam** | `brands` table (one default row), `brand_id` on posts/batches/feedback/banned_images/settings, brand text moves into the DB (`/distill` edits the row), `cost_usd` per batch/post. Nothing visible changes | 2–3 d |
+| M11 | **Media v2** | Telegram files + albums (full quality), `/stock` paging with thumbnails + inline ban/delete, **Google Drive folder sync** (owner shares a folder with the bot's service account; nightly + `/sync`; posted/banned written back into subfolders). Google Photos only via the Picker API (`/import`, manual pick) — optional | 1 wk |
+| M12 | **Anchors (steering)** | `/idea <text>` anchors that steer an image post; opt-in calendar prompts a week ahead (`/date` for brand dates); brand-facts stock extracted from the brand text; anchors are consumables shown in `/stock`, theme cooldown doubles per use, hard ratio ceiling in the queue; anchor-steered stock image pick via cached `visual_concept` | 1 wk |
+| M13 | **Beta onboarding** | `/start` wizard for an unknown chat (name → brand voice from pasted text or 5 questions → photos → connect Instagram → schedule → starts in learning mode); per-brand IG token + refresh job. **Start the Meta review for messaging here** (weeks of lead time) | 1–2 wk |
+| M14 | **Instagram DM assistant** | three tiers from a `## DM guidelines` brand section: auto-answer only with a cited guideline line, draft-to-Telegram (✅ Send / ✏️ Fix / ❌, 24h-window countdown on the card), escalate to the owner with the thread; `Post` generalises to a reviewable item; replies feed learning like posts | 2 wk |
+| M15 | **Analytics loop** | nightly IG insights into `post_metrics`, top performers in the learning context, weekly digest DM — once there is published data | 3 d |
+| M16 | **Limits & billing** | per-brand usage caps, cost view in `/status`, manual invoicing; payment provider only when a brand asks to pay | 3–4 d |
+| — | **Carousels** | filler between any two milestones; design below | 2–3 d |
 
-1. **M9 — Carousel posts** (graduated from backlog 2026-10-05):
-   - Storage: JSON list column `image_refs` on `Post` (one migration; `image_ref`
-     stays as the cover). A join table only when slides need per-slide captions.
-   - Generation: 3–5 unused images in one vision call → connecting story + one caption.
-   - Review: `sendMediaGroup` for the images; media groups can't carry inline buttons,
-     so the Approve/Reject card is a second message (`send_suggestion` rework).
-   - Publish: IG Graph N child containers → one `CAROUSEL` container → publish; the
-     existing container-resume/idempotency path extends to it.
-   - **First task: a `## Carousels` section in `brand.md` with 2–3 sample stories** —
-     the prompt can't be written without knowing what a good one looks like.
-2. **Later, relative order unchanged:** D — more review channels (re-aimed at
-   **WhatsApp Business** for the Israeli market, not Discord/Slack) → F — analytics
-   feedback → G — multi-tenant.
+Open owner steps (after M9 makes them easy): the paid learning A/B (`eval_models
+--learning` vs plain on Opus 5.5 against a prod snapshot → DEV_GUIDELINES "Model
+decision") and a real-chat round-trip of ✏️ Fix and `/distill`.
+
+**Carousel design** (graduated from backlog 2026-10-05):
+- Storage: JSON list column `image_refs` on `Post` (one migration; `image_ref` stays as
+  the cover). A join table only when slides need per-slide captions.
+- Generation: 3–5 unused images in one vision call → connecting story + one caption.
+- Review: `sendMediaGroup` for the images; media groups can't carry inline buttons, so
+  the Approve/Reject card is a second message (`send_suggestion` rework).
+- Publish: IG Graph N child containers → one `CAROUSEL` container → publish; the
+  existing container-resume/idempotency path extends to it.
+- **First task: a `## Carousels` section in the brand text with 2–3 sample stories** —
+  the prompt can't be written without knowing what a good one looks like.
 
 ## Backlog (untriaged)
 
 > Ideas land here (not in PRODUCT_SPEC); milestones graduate out of it.
+
+- **X as a second network** — only when a brand asks. X API is pay-per-use since
+  2026-02 (≈ $0.015/post, $0.20 with a link, no free tier), so money is not the issue; the
+  work is per-network captions (280 chars won't hold he + en + disclaimer; link in bio,
+  never in the post) and the media-upload/OAuth 1.0a path. Media-less (anchor-only)
+  generation and the Pillow **text-card renderer** (brand colours/font/logo, Hebrew via
+  `python-bidi`) unlock with it.
+- **WhatsApp as an owner channel** (DM-assistant escalations, digests) — if Telegram
+  proves limiting for a beta brand. Not a posting channel.
 
 - **Generated media from brand designs** (image + short clip from a designated design,
   e.g. a shirt print placed into a generated scene/story) — spec item B widened.
