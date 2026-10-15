@@ -20,7 +20,7 @@ from app.db import SessionLocal, get_session, init_db
 from app.models import Post, PostStatus
 from app.notifier.telegram import TelegramNotifier, _set_webhook, process_callback, process_message
 from app.pipeline import generate, publish, queue, review
-from app.scheduler import build_scheduler
+from app.scheduler import build_scheduler, load_schedule
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +41,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if settings.is_dev:
         await init_db()
     notifier = TelegramNotifier(settings)
+    # Fail closed: unreadable settings → learning mode (slots paused, no catch-up) + a DM.
+    schedule = await load_schedule(SessionLocal, settings)
     async with SessionLocal() as session:
         await publish.recover_orphaned(session, notifier, settings)
-        await publish.catch_up_missed_slot(session, settings)
-    scheduler = build_scheduler(SessionLocal, notifier, settings)
+        if not schedule.degraded:
+            await publish.catch_up_missed_slot(session, settings)
+    scheduler = build_scheduler(SessionLocal, notifier, settings, schedule)
+    notifier.scheduler = scheduler
     scheduler.start()
+    if schedule.degraded:
+        try:
+            await notifier.send_message(
+                "⚠️ Could not read settings at startup — running in LEARNING mode "
+                "(nothing publishes). Fix the database, then /mode live."
+            )
+        except Exception:
+            logger.exception("Could not DM the settings warning.")
     app.state.notifier = notifier
     app.state.scheduler = scheduler
     if not settings.is_dev and settings.telegram_webhook_base:
@@ -58,8 +70,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # at WARNING there — app INFO is filtered). ponytail: elevate this one banner rather
     # than reconfigure global logging.
     logger.warning(
-        "CuteBot started (env=%s) — publishing %s.",
+        "CuteBot started (env=%s, mode=%s%s) — publishing %s.",
         settings.app_env,
+        schedule.mode,
+        ", settings unreadable" if schedule.degraded else "",
         "LIVE (real Instagram)" if live else "DRY-RUN (stub, nothing posted)",
     )
     try:

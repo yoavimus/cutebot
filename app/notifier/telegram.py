@@ -33,7 +33,8 @@ import httpx
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import distill, learning, stock
+from app import distill, learning, prefs, stock
+from app import scheduler as sched
 from app.config import Settings, get_settings
 from app.llm import CaptionError
 from app.models import BannedImage, Decision, Post, PostStatus
@@ -75,6 +76,8 @@ _COMMAND_HELP: list[tuple[str, str]] = [
     ("postnow", "publish next in queue, or /postnow <id>"),
     ("requeue", "put a failed post back: /requeue <id>"),
     ("stock", "stock library counts; /stock unban <file>"),
+    ("schedule", "view / change slots: /schedule post 12:00,18:00 · generate 09:00 · reset"),
+    ("mode", "/mode learning (✅ = Keep, nothing posts) or /mode live"),
     ("distill", "propose a brand.md revision from recent feedback"),
     ("help", "this list"),
 ]
@@ -82,6 +85,9 @@ _COMMAND_HELP: list[tuple[str, str]] = [
 
 class TelegramNotifier:
     """Concrete :class:`app.notifier.base.Notifier` backed by the Telegram Bot API."""
+
+    # Set by the app lifespan; None in the polling CLI (prefs still save, jobs apply on boot).
+    scheduler: sched.CuteScheduler | None = None
 
     def __init__(self, settings: Settings | None = None) -> None:
         self._settings = settings or get_settings()
@@ -347,7 +353,10 @@ async def _build_status_summary(session: AsyncSession, settings: Settings) -> st
             .limit(5)
         )
     ).all()
-    lines = ["Pipeline status"]
+    lines = []
+    if await prefs.mode(session) == prefs.LEARNING:
+        lines.append("🎓 LEARNING MODE — nothing publishes\n")
+    lines.append("Pipeline status")
     for s in PostStatus:
         n = counts.get(s, 0)
         if n:
@@ -442,6 +451,9 @@ async def _cmd_postnow(
 ) -> None:
     from app.pipeline import publish
 
+    if await prefs.mode(session) == prefs.LEARNING:
+        await notifier.send_message("Learning mode — /mode live to publish.")
+        return
     if args.isdigit():
         post = await publish.publish_by_id(session, int(args))
         if post is None:
@@ -464,6 +476,105 @@ async def _cmd_postnow(
             await notifier.send_message(f"Post #{post.id} published ✅")
         else:
             await notifier.send_message(f"Post #{post.id} publish failed.")
+
+
+async def _cmd_mode(
+    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+) -> None:
+    current = await prefs.mode(session)
+    want = args.lower().strip()
+    if not want:
+        await notifier.send_message(f"Mode: {current}")
+        return
+    if want not in (prefs.LIVE, prefs.LEARNING):
+        await notifier.send_message("Usage: /mode learning | /mode live")
+        return
+    await prefs.set(session, prefs.MODE, want)
+    scheduler = notifier.scheduler
+    if scheduler is not None:
+        sched.apply_mode(scheduler, want)
+    if want == prefs.LEARNING:
+        n = await session.scalar(
+            select(func.count()).select_from(Post).where(Post.status == PostStatus.APPROVED)
+        )
+        queued = f" {n} queued post(s) stay queued." if n else ""
+        await notifier.send_message(
+            "🎓 Learning mode — ✅ now means 📚 Keep, posting slots paused, "
+            f"/postnow disabled.{queued}"
+        )
+    else:
+        await notifier.send_message("🚀 Live — posting slots resumed, ✅ publishes again.")
+
+
+_SCHEDULE_USAGE = (
+    "Usage: /schedule · /schedule post 12:00,18:00 (1–6 HH:MM) · "
+    '/schedule generate 09:00 | "0 9 * * 1-5" · /schedule reset'
+)
+
+
+def _fmt_next(when: Any) -> str:
+    return when.strftime("%a %d %b %H:%M") if when is not None else "paused"
+
+
+async def _schedule_view(
+    session: AsyncSession, notifier: TelegramNotifier, settings: Settings
+) -> str:
+    cron = await prefs.generation_cron(session, settings)
+    slots = await prefs.posting_slots(session, settings)
+    lines = [f"Schedule ({settings.schedule_tz})", f"generate: {cron}"]
+    runs = sched.next_runs(notifier.scheduler) if notifier.scheduler is not None else {}
+    if "generation" in runs:
+        lines.append(f"  next: {_fmt_next(runs['generation'])}")
+    lines.append(f"post: {prefs.format_slots(slots)}")
+    for hh, mm in slots:
+        job_id = f"posting-{hh:02d}{mm:02d}"
+        if job_id in runs:
+            lines.append(f"  {hh:02d}:{mm:02d} next: {_fmt_next(runs[job_id])}")
+    if await prefs.mode(session) == prefs.LEARNING:
+        lines.append("🎓 learning mode — slots are paused")
+    return "\n".join(lines)
+
+
+async def _cmd_schedule(
+    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+) -> None:
+    sub, _, rest = args.partition(" ")
+    sub, rest = sub.lower(), rest.strip()
+    scheduler = notifier.scheduler
+    tz = settings.schedule_tz
+    paused = await prefs.mode(session) == prefs.LEARNING
+
+    if sub == "":
+        await notifier.send_message(await _schedule_view(session, notifier, settings))
+        return
+    if sub == "post":
+        try:
+            slots = prefs.parse_slots(rest)
+        except ValueError as exc:
+            await notifier.send_message(f"{exc}\n{_SCHEDULE_USAGE}")
+            return
+        await prefs.set(session, prefs.POSTING_SLOTS, prefs.format_slots(slots))
+        if scheduler is not None:
+            sched.apply_slots(scheduler, slots, tz, paused=paused)
+    elif sub == "generate":
+        try:
+            cron = prefs.parse_generation(rest)
+        except ValueError:
+            await notifier.send_message(f"Bad time or cron.\n{_SCHEDULE_USAGE}")
+            return
+        await prefs.set(session, prefs.GENERATION_CRON, cron)
+        if scheduler is not None:
+            sched.reschedule_generation(scheduler, cron, tz)
+    elif sub == "reset":
+        await prefs.delete(session, prefs.POSTING_SLOTS)
+        await prefs.delete(session, prefs.GENERATION_CRON)
+        if scheduler is not None:
+            sched.apply_slots(scheduler, settings.posting_slots_list, tz, paused=paused)
+            sched.reschedule_generation(scheduler, settings.generation_cron, tz)
+    else:
+        await notifier.send_message(_SCHEDULE_USAGE)
+        return
+    await notifier.send_message(await _schedule_view(session, notifier, settings))
 
 
 async def _cmd_queue(
@@ -541,6 +652,8 @@ _COMMANDS: dict[str, Any] = {
     "/requeue": _cmd_requeue,
     "/pending": _cmd_pending,
     "/stock": _cmd_stock,
+    "/schedule": _cmd_schedule,
+    "/mode": _cmd_mode,
     "/distill": _cmd_distill,
     "/help": _cmd_help,
     "/start": _cmd_help,
@@ -782,7 +895,12 @@ async def process_callback(
     elif pre_status == post.status:
         toast = f"Already {post.status}"
     else:
-        toast = "📚 Kept (learning only)" if decision == "keep" else "✅ Approved"
+        if post.status == PostStatus.KEPT:
+            toast = "📚 Kept (learning only)"
+            if decision == "approve":
+                toast = "📚 Kept — learning mode"
+        else:
+            toast = "✅ Approved"
 
     if post is not None:
         await notifier.mark_decided(cb["message"], post)

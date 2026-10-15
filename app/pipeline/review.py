@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import learning, llm
+from app import learning, llm, prefs
 from app.brand import load_brand
 from app.config import Settings
 from app.models import Decision, Feedback, Post, PostStatus
@@ -72,6 +72,8 @@ async def handle_decision(
         logger.info("Post %s is %s — cannot reverse.", post_id, post.status)
         return post
 
+    if decision == "approve" and await prefs.mode(session) == prefs.LEARNING:
+        decision = "keep"  # learning mode: ✅ never queues — the one gate stays one door
     dec, status = _VERDICTS[decision]
     if post.status == status:
         logger.info("Post %s already %s — no-op.", post_id, post.status)

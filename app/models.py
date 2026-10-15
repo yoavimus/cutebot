@@ -114,3 +114,18 @@ class Feedback(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     post: Mapped[Post] = relationship(back_populates="feedback")
+
+
+class Setting(Base):
+    """Runtime preference (M9): ``mode`` / ``generation_cron`` / ``posting_slots``.
+
+    Plain key/value; no row = the env default (see ``app/prefs.py``). M10 adds ``brand_id``.
+    """
+
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
