@@ -124,37 +124,37 @@ Tests: prefs fallback (no row → env value), slot validation (bad input → usa
 nothing stored), reschedule replaces job ids, learning mode turns approve into keep and
 pauses slot jobs, `/postnow` refusal, catch-up uses stored slots.
 
-### M9.3 — Console UX: reply keyboard, HTML output, drill-down buttons — `app/notifier/telegram.py`
+### M9.3 — Console UX: slash menu, HTML output, drill-down buttons — `app/notifier/telegram.py`
 
-- **Reply keyboard** (persistent, `resize_keyboard`): `📊 Status · 📬 Queue · ✨ Generate` /
-  `📷 Stock · 🗓 Schedule · 🎓 Mode`. Sent with `/start`, `/help`, and once after boot.
-  Tapping a button sends its label as text; `process_message` maps labels → commands
-  (`_LABELS: dict[str, str]`), so the handlers don't change. `🎓 Mode` toggles with a
-  confirmation inline keyboard (`mode:learning` / `mode:live` / cancel) — mode is the one
-  thing that must not flip by accident.
+- **Slash menu** (the native "/" list, `setMyCommands`): one table drives the menu and
+  `/help` — `_COMMANDS: list[tuple[group, command, menu_label, usage]]`. Menu labels are
+  emoji-prefixed, verb-first, ≤ 32 chars so they don't truncate on a phone; argument hints
+  move out of the menu into `/help`. Order = frequency, settings last:
+  `status 📊 Pipeline, queue and stock counts` · `queue 📬 Approved posts, in order` ·
+  `pending 🔔 Resend cards awaiting review` · `generate ✨ Draft a batch now` ·
+  `postnow ▶️ Publish the next queued post` · `stock 📷 Stock library` ·
+  `schedule 🗓 View or change the slots` · `mode 🎓 Learning / live` ·
+  `distill 📝 Propose a brand.md revision` · `help ❓ All commands + arguments`.
+  `requeue` leaves the menu (rare; still a typed command, listed in `/help`). The list
+  is registered with `scope: {type: chat, chat_id: owner}` so only the owner's chat
+  shows it; the default scope stays empty.
+- **No reply keyboard.** It would duplicate the slash menu and permanently eat the
+  keyboard area; the one-tap surfaces live on the messages instead (below).
 - **HTML** (`parse_mode=HTML`, escaped values): `/status` as sections with bold headers
   and a `<code>` counts block; `/queue` rows as `#id · pos · preview` with inline
   `▶ Post now` / `❌ Drop` buttons per row (callbacks `postnow:<id>` → existing
   `publish_by_id`; `drop:<id>` → `handle_decision(reject)`); `/stock` banned list as
   rows with `♻️ Unban` buttons (`unban:<ref>` — ref length ≤ 64 bytes of callback data,
-  else fall back to the text command); `/pending` resends with a count line.
-- `/help` grouped: *Review a card* · *Pipeline* · *Library* · *Settings*, each 2–4 lines.
+  else fall back to the text command); `/pending` resends with a count line. `/mode`
+  answers with a confirmation inline keyboard (`mode:learning` / `mode:live` / cancel) —
+  mode is the one thing that must not flip by accident.
+- `/help` grouped: *Review a card* · *Pipeline* · *Library* · *Settings*, each 2–4 lines,
+  generated from the same table.
 - `send_message(text, *, html=False, keyboard=None)` grows the two keyword args; every
   existing call stays valid.
-- Tests: label → command mapping, HTML escaping of captions in `/queue`, the new
-  callbacks route to the existing functions, keyboard payload shape.
-
-### M9.4 — Close-out: docs, A/B, prod round-trip — `docs/`, `env.example`
-
-- `docs/SCRIPTS_REFERENCE.md` bot section rewritten for the new cards/commands;
-  `docs/PRODUCT_SPEC.md` §2 lifecycle gains `kept`, §4 Feedback gains `almost`;
-  `docs/ROADMAP.md` M9 row ticked; `env.example` notes that cron/slots are env *defaults*
-  overridable from the bot; `docs/INSTAGRAM_RUNBOOK.md` untouched.
-- Owner steps unlocked by M9 (recorded in DEV_GUIDELINES "Model decision" when done):
-  flip `/mode learning`, run `/generate 10` a few days, Keep/Almost/Fix freely, then the
-  paid learning A/B (`eval_models --learning`) against the prod snapshot; real-chat
-  round-trip of ✏️ Fix, `/distill`, `/schedule`, `/mode`.
-- Plan archived to `docs/archive/M9_PLAN.md`.
+- Tests: menu payload shape (labels ≤ 32 chars, owner scope), `/help` lists every
+  command incl. `requeue`, HTML escaping of captions in `/queue`, the new callbacks
+  route to the existing functions.
 
 ## Sequencing
 
@@ -172,8 +172,9 @@ One branch `m9-console`, one PR, migrations `0007` + `0008` run on deploy.
 - **Card edit races** — a Retry while the original card is being edited; the Retry
   button is removed by editing the old card *after* the new post is sent, so a lost edit
   only leaves a stale button that answers "already retried → #id".
-- **Reply keyboard noise** — a tapped label is a plain message; non-owner chats are
-  ignored exactly like commands today.
+- **Menu scope** — a chat-scoped `setMyCommands` only shows in the owner chat; if the
+  call is rejected (e.g. chat id not yet known at boot) fall back to the default scope so
+  the menu never disappears.
 
 ## Definition of done
 
@@ -182,5 +183,5 @@ One branch `m9-console`, one PR, migrations `0007` + `0008` run on deploy.
 - In a test chat: Keep / Almost (+chip) / Retry / Fix / Approve / Reject round-trips; a
   kept post never appears in `/queue` or publishes; `/mode learning` pauses slots and
   turns ✅ into Keep; `/schedule post 10:00` changes the next-run time without restart;
-  the reply keyboard works after a restart.
+  the slash menu shows the new labels after a restart.
 - `/status` shows the verdict counts and the mode; docs updated; plan archived.
