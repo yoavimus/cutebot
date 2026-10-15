@@ -35,7 +35,7 @@ table afterwards — a one-column migration, deliberately deferred so M9 ships f
 - **Settings live in the DB, env is the default.** `settings` table (key/value text);
   `Settings` reads env; a tiny `app/prefs.py` reads the row and falls back to env. The
   scheduler is rescheduled in place — no restart.
-- **No Mini App.** Reply keyboard + inline keyboards + HTML. The Mini App question is
+- **No Mini App.** Slash menu + inline keyboards + HTML. The Mini App question is
   re-asked in M11 (media gallery), not here.
 
 ## Approach
