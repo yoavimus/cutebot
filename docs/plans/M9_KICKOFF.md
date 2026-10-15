@@ -3,7 +3,8 @@
 The tickets are sequential (each edits `review.handle_decision` / `telegram.py` on top
 of the previous one), so the sessions run **one after another on the same branch**, not
 in parallel. Start session N+1 only after session N reports Done and its commit is on
-`m9-console`.
+`m9-console`. One laptop, one checkout: **no worktrees, no extra branches** — every
+session works in `~/Projects/cutebot` on `m9-console`, one session at a time.
 
 | Session | Ticket | Model | Why |
 |---------|--------|-------|-----|
@@ -51,7 +52,8 @@ a summary.
 ### Working rules
 
 - Branch **`m9-console` exists locally**: `git checkout m9-console` (never branch from
-  `main`, never rebase). Small, focused commits; message ends with
+  `main`, never rebase, never create a worktree or another branch — `EnterWorktree` is
+  off limits; this checkout is the only one). Small, focused commits; message ends with
   `Co-Authored-By: <your model name> <noreply@anthropic.com>`.
 - Linear: set your ticket **In Progress** when you start and **Done** with a short
   comment (what shipped, commit hash) when it's green. Never create tickets; work you
