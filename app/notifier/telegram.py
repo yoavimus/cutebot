@@ -1,10 +1,14 @@
 """Telegram review adapter — DMs suggestions with inline Approve/Reject buttons.
 
 Callback data:
-  ``approve:<post_id>``            → approve the post
+  ``approve:<post_id>``            → approve the post (also 📤 Publish after all on a kept card)
+  ``keep:<post_id>``               → 📚 Keep: approved for learning only, never published
   ``reject:<post_id>``             → show reason-picker chips
   ``reason:<post_id>:<reason>``    → reject with the given reason (or "skip");
                                      ``ban_image`` also bans the photo from future batches
+  ``almost:<post_id>``             → 🤏 Almost: show the "What's off?" chips (no ban chip)
+  ``almostr:<post_id>:<reason>``   → apply Almost with the chip (or "skip")
+  ``retry:<post_id>``              → 🔁 re-caption an Almost'd post's image as a new card
   ``distill:apply|discard:<token>`` → owner's answer to a /distill brand.md proposal
   ``fix:<post_id>``                → ForceReply prompt; the owner's reply (``#<id>`` in the
                                      prompt text — stateless) replaces the caption and approves
@@ -31,7 +35,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import distill, learning, stock
 from app.config import Settings, get_settings
-from app.models import BannedImage, Post, PostStatus
+from app.llm import CaptionError
+from app.models import BannedImage, Decision, Post, PostStatus
+from app.pipeline import review
 from app.pipeline.review import apply_edit, handle_decision
 from app.render import image_path, render_full_caption
 
@@ -93,9 +99,13 @@ class TelegramNotifier:
             "inline_keyboard": [
                 [
                     {"text": "✅ Approve", "callback_data": f"approve:{post.id}"},
-                    {"text": "❌ Reject", "callback_data": f"reject:{post.id}"},
+                    {"text": "📚 Keep", "callback_data": f"keep:{post.id}"},
                     {"text": "✏️ Fix", "callback_data": f"fix:{post.id}"},
-                ]
+                ],
+                [
+                    {"text": "🤏 Almost", "callback_data": f"almost:{post.id}"},
+                    {"text": "❌ Reject", "callback_data": f"reject:{post.id}"},
+                ],
             ]
         }
         async with httpx.AsyncClient(timeout=15) as client:
@@ -162,24 +172,36 @@ class TelegramNotifier:
                 json={"callback_query_id": callback_query_id, "text": text},
             )
 
-    async def mark_decided(self, cb_message: dict, post: Post, reason: str | None = None) -> None:
-        """Edit the reviewed message; leave the opposite button while decision is reversible."""
+    async def mark_decided(
+        self, cb_message: dict, post: Post, reason: str | None = None, almost: bool = False
+    ) -> None:
+        """Edit the reviewed card; leave the reversal buttons while the verdict is reversible."""
+        pid = post.id
         if post.status == PostStatus.APPROVED:
             label = "✅ Approved"
-            keyboard: dict[str, Any] = {
-                "inline_keyboard": [[{"text": "↩︎ Reject", "callback_data": f"reject:{post.id}"}]]
-            }
+            row = [_btn("📚 Keep instead", f"keep:{pid}"), _btn("↩︎ Reject", f"reject:{pid}")]
+        elif post.status == PostStatus.KEPT:
+            label = "📚 Kept (learning only)"
+            row = [
+                _btn("📤 Publish after all", f"approve:{pid}"),
+                _btn("↩︎ Reject", f"reject:{pid}"),
+            ]
         elif post.status == PostStatus.REJECTED:
-            label = "❌ Rejected"
-            if reason:
-                label += f" ({reason})"
-            keyboard = {
-                "inline_keyboard": [[{"text": "↩︎ Approve", "callback_data": f"approve:{post.id}"}]]
-            }
+            label = ("🤏 Almost" if almost else "❌ Rejected") + (f" ({reason})" if reason else "")
+            row = [_btn("↩︎ Approve", f"approve:{pid}")]
+            if almost:
+                row.insert(0, _btn("🔁 Retry", f"retry:{pid}"))
         else:
             label = "✅ Published" if post.status == PostStatus.PUBLISHED else f"[{post.status}]"
-            keyboard = {"inline_keyboard": []}
-        chat_id = cb_message["chat"]["id"]
+            row = []
+        await self._edit_card(cb_message, label, [row] if row else [])
+
+    async def mark_retried(self, cb_message: dict, new_id: int) -> None:
+        """Replace the Almost card's 🔁 Retry with a pointer to the new card."""
+        await self._edit_card(cb_message, f"🔁 retried → #{new_id}", [])
+
+    async def _edit_card(self, cb_message: dict, suffix: str, rows: list[list[dict]]) -> None:
+        """Append ``suffix`` to the card's caption/text and replace its buttons with ``rows``."""
         message_id = cb_message["message_id"]
         is_photo = "photo" in cb_message
         endpoint = "editMessageCaption" if is_photo else "editMessageText"
@@ -190,20 +212,20 @@ class TelegramNotifier:
                 resp = await client.post(
                     self._url(endpoint),
                     json={
-                        "chat_id": chat_id,
+                        "chat_id": cb_message["chat"]["id"],
                         "message_id": message_id,
-                        body_key: f"{original}\n\n{label}",
-                        "reply_markup": keyboard,
+                        body_key: f"{original}\n\n{suffix}",
+                        "reply_markup": {"inline_keyboard": rows},
                     },
                 )
             if not resp.json().get("ok"):
                 logger.warning(
-                    "mark_decided edit rejected: message=%s description=%s",
+                    "card edit rejected: message=%s description=%s",
                     message_id,
                     resp.json().get("description"),
                 )
         except Exception as exc:
-            logger.warning("mark_decided failed: message=%s error=%s", message_id, exc)
+            logger.warning("card edit failed: message=%s error=%s", message_id, exc)
 
     async def prompt_edit(self, cb_message: dict, post_id: int) -> None:
         """Ask the owner for the corrected caption (ForceReply; state lives in the text)."""
@@ -290,46 +312,20 @@ class TelegramNotifier:
         except Exception as exc:
             logger.warning("show_edited failed: card=%s error=%s", card_id, exc)
 
-    async def show_reason_picker(self, cb_message: dict, post_id: int) -> None:
-        """Edit the message in-place to display reject-reason chips."""
-        reason_row = [
-            {"text": label, "callback_data": f"reason:{post_id}:{r}"}
-            for r, label in _REJECT_REASONS.items()
-        ]
-        keyboard = {
-            "inline_keyboard": [
-                reason_row,
-                [
-                    {"text": "🚫 Ban image", "callback_data": f"reason:{post_id}:{_BAN_REASON}"},
-                    {"text": "Skip", "callback_data": f"reason:{post_id}:skip"},
-                ],
-            ]
-        }
-        chat_id = cb_message["chat"]["id"]
-        message_id = cb_message["message_id"]
-        is_photo = "photo" in cb_message
-        endpoint = "editMessageCaption" if is_photo else "editMessageText"
-        body_key = "caption" if is_photo else "text"
-        original = cb_message.get(body_key, "")
-        try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.post(
-                    self._url(endpoint),
-                    json={
-                        "chat_id": chat_id,
-                        "message_id": message_id,
-                        body_key: f"{original}\n\nWhy reject?",
-                        "reply_markup": keyboard,
-                    },
-                )
-            if not resp.json().get("ok"):
-                logger.warning(
-                    "show_reason_picker edit rejected: message=%s description=%s",
-                    message_id,
-                    resp.json().get("description"),
-                )
-        except Exception as exc:
-            logger.warning("show_reason_picker failed: message=%s error=%s", message_id, exc)
+    async def show_reason_picker(
+        self, cb_message: dict, post_id: int, almost: bool = False
+    ) -> None:
+        """Edit the card in place to show the reason chips (❌ Reject or 🤏 Almost)."""
+        prefix = "almostr" if almost else "reason"
+        chips = [_btn(label, f"{prefix}:{post_id}:{r}") for r, label in _REJECT_REASONS.items()]
+        last = [_btn("Skip", f"{prefix}:{post_id}:skip")]
+        if not almost:  # the image was fine by definition on an Almost
+            last.insert(0, _btn("🚫 Ban image", f"reason:{post_id}:{_BAN_REASON}"))
+        await self._edit_card(cb_message, "What's off?" if almost else "Why reject?", [chips, last])
+
+
+def _btn(text: str, data: str) -> dict[str, str]:
+    return {"text": text, "callback_data": data}
 
 
 _DISTILL_DIFF_LIMIT = 3000  # keeps rationale + diff inside Telegram's 4096-char message cap
@@ -359,14 +355,26 @@ async def _build_status_summary(session: AsyncSession, settings: Settings) -> st
     queue_depth = counts.get(PostStatus.APPROVED, 0) + counts.get(PostStatus.PUBLISHING, 0)
     lines.append(f"\nQueue depth: {queue_depth}")
     lines.append(stock.summary_line(await stock.counts(session, settings)))
-    ctx = await learning.build_context(session, settings)
-    lines.append("learning: " + ("off" if not settings.learning_enabled else ctx.summary()))
+    lines.append(await _learning_line(session, settings))
     if recent:
         lines.append("\nLast published:")
         for p in recent:
             ts = p.published_at.strftime("%Y-%m-%d %H:%M UTC") if p.published_at else "?"
             lines.append(f"  #{p.id} — {ts}")
     return "\n".join(lines)
+
+
+async def _learning_line(session: AsyncSession, settings: Settings) -> str:
+    """The /status learning line — the verdict counts that tell the owner when to go live."""
+    if not settings.learning_enabled:
+        return "learning: off"
+    n = await learning.verdict_counts(session, settings)
+    ctx = await learning.build_context(session, settings)
+    return (
+        f"learning: {n.get(Decision.APPROVE, 0)} ✅ · {n.get(Decision.ALMOST, 0)} 🤏 · "
+        f"{n.get(Decision.REJECT, 0)} ❌ (last {settings.learning_window_days}d)\n"
+        f"  prompt sees: {ctx.summary()}"
+    )
 
 
 # ─────────────────────────────── command handlers ────────────────────────────
@@ -383,8 +391,10 @@ async def _cmd_help(
 ) -> None:
     lines = ["Commands:"] + [f"/{c} — {d}" for c, d in _COMMAND_HELP]
     lines.append(
-        "\nReview cards: ✅ Approve · ❌ Reject (pick a reason; 🚫 Ban image retires the photo)"
-        ' · ✏️ Fix (reply with the corrected Hebrew caption; "en:" prefix for English).'
+        "\nReview cards: ✅ Approve (publish) · 📚 Keep (good, learning only — never posts)"
+        ' · ✏️ Fix (reply with the corrected Hebrew caption; "en:" prefix for English)'
+        " · 🤏 Almost (right direction, flawed — pick what's off, then 🔁 Retry the same photo)"
+        " · ❌ Reject (pick a reason; 🚫 Ban image retires the photo)."
     )
     lines.append("Send a photo to add it to the stock library.")
     await notifier.send_message("\n".join(lines))
@@ -440,6 +450,10 @@ async def _cmd_postnow(
             await notifier.send_message(f"Post #{post.id} published ✅")
         elif post.status == PostStatus.FAILED:
             await notifier.send_message(f"Post #{post.id} publish failed.")
+        elif post.status == PostStatus.KEPT:
+            await notifier.send_message(
+                f"Post #{post.id} is kept (learning only) — tap 📤 on its card"
+            )
         else:
             await notifier.send_message(f"Post #{post.id} is {post.status}, not approved.")
     else:
@@ -508,8 +522,6 @@ async def _cmd_pending(
 async def _cmd_distill(
     session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
 ) -> None:
-    from app.llm import CaptionError
-
     try:
         result = await distill.propose(session, settings)
     except CaptionError as exc:
@@ -631,7 +643,7 @@ async def process_callback(
     cb: dict,
     settings: Settings | None = None,
 ) -> None:
-    """Parse a Telegram callback query and route to approve or two-step reject."""
+    """Route a Telegram callback: approve/keep, two-step reject/almost, retry, fix, distill."""
     data = cb.get("data", "")
 
     # ── /distill proposal: the only callback that writes a file, so owner-gated ──
@@ -652,9 +664,9 @@ async def process_callback(
         await notifier.answer_callback(cb["id"], label)
         return
 
-    # ── Step 1: ❌ tap → show reason picker ──────────────────────────────────
-    if data.startswith("reject:"):
-        raw_id = data.removeprefix("reject:")
+    # ── Step 1: ❌ / 🤏 tap → show reason picker ─────────────────────────────
+    if data.startswith(("reject:", "almost:")):
+        verb, _, raw_id = data.partition(":")
         if not raw_id.isdigit():
             return
         post_id = int(raw_id)
@@ -666,22 +678,27 @@ async def process_callback(
             await notifier.answer_callback(cb["id"], "Can't change — already published")
             await notifier.mark_decided(cb["message"], post)
             return
-        await notifier.answer_callback(cb["id"], "Why reject?")
-        await notifier.show_reason_picker(cb["message"], post_id)
-        logger.info("callback post_id=%s action=reject -> showing reason picker", post_id)
+        almost = verb == "almost"
+        await notifier.answer_callback(cb["id"], "What's off?" if almost else "Why reject?")
+        await notifier.show_reason_picker(cb["message"], post_id, almost=almost)
+        logger.info("callback post_id=%s action=%s -> showing reason picker", post_id, verb)
         return
 
-    # ── Step 2: reason tap → reject with (optional) reason ───────────────────
-    if data.startswith("reason:"):
+    # ── Step 2: chip tap → reject / almost with (optional) reason ────────────
+    if data.startswith(("reason:", "almostr:")):
         parts = data.split(":", 2)
         if len(parts) != 3 or not parts[1].isdigit():
             return
+        almost = parts[0] == "almostr"
         post_id, reason_str = int(parts[1]), parts[2]
         reason: str | None = None if reason_str == "skip" else reason_str
+        if almost and reason == _BAN_REASON:
+            return  # never offered on Almost; a forged chip must not ban anything
 
         pre = await session.get(Post, post_id)
         pre_status = pre.status if pre is not None else None
-        post = await handle_decision(session, post_id, "reject", reason=reason)
+        decision = "almost" if almost else "reject"
+        post = await handle_decision(session, post_id, decision, reason=reason)
 
         if post is None:
             await notifier.answer_callback(cb["id"], "Post not found")
@@ -691,16 +708,19 @@ async def process_callback(
         elif pre_status == post.status:
             toast = f"Already {post.status}"
         else:
-            toast = "❌ Rejected" + (f" ({reason_str})" if reason else "")
+            toast = "🤏 Almost" if almost else "❌ Rejected"
+            toast += f" ({reason_str})" if reason else ""
         if reason == _BAN_REASON and post.status == PostStatus.REJECTED:
             await stock.ban_image(session, post.image_ref)
             await session.commit()
             toast = "❌ Rejected · 🚫 image banned"
 
-        await notifier.mark_decided(cb["message"], post, reason=reason)
+        changed = pre_status != post.status
+        await notifier.mark_decided(cb["message"], post, reason=reason, almost=almost and changed)
         logger.info(
-            "callback post_id=%s decision=reject reason=%s status=%s toast=%r",
+            "callback post_id=%s decision=%s reason=%s status=%s toast=%r",
             post_id,
+            decision,
             reason_str,
             post.status,
             toast,
@@ -721,7 +741,32 @@ async def process_callback(
             await notifier.prompt_edit(cb["message"], post.id)
         return
 
-    # ── Approve flow ──────────────────────────────────────────────────────────
+    # ── 🔁 Retry an Almost'd post: same image, new card ───────────────────────
+    if data.startswith("retry:"):
+        raw_id = data.removeprefix("retry:")
+        if not raw_id.isdigit():
+            return
+        post_id = int(raw_id)
+        if (done := await review.retry_child(session, post_id)) is not None:
+            await notifier.answer_callback(cb["id"], f"Already retried → #{done.id}")
+            await notifier.mark_retried(cb["message"], done.id)
+            return
+        await notifier.answer_callback(cb["id"], "🔁 Generating a retry…")
+        try:
+            new = await review.retry(session, post_id, settings or get_settings())
+        except CaptionError as exc:
+            await notifier.send_message(f"Retry of #{post_id} failed: {exc}")
+            return
+        if new is None:
+            await notifier.send_message(f"Post #{post_id} isn't an 🤏 Almost — nothing to retry.")
+            return
+        await review.send_for_review([new], notifier)
+        # after the new card is out: a lost edit only leaves a stale button (answered above)
+        await notifier.mark_retried(cb["message"], new.id)
+        logger.info("callback post_id=%s action=retry -> #%s", post_id, new.id)
+        return
+
+    # ── Approve / 📚 Keep flow ────────────────────────────────────────────────
     parsed = parse_callback(data)
     if not parsed:
         return
@@ -737,7 +782,7 @@ async def process_callback(
     elif pre_status == post.status:
         toast = f"Already {post.status}"
     else:
-        toast = "✅ Approved"
+        toast = "📚 Kept (learning only)" if decision == "keep" else "✅ Approved"
 
     if post is not None:
         await notifier.mark_decided(cb["message"], post)
@@ -753,9 +798,9 @@ async def process_callback(
 
 
 def parse_callback(data: str) -> tuple[str, int] | None:
-    """Parse ``approve:<id>`` into ``(decision, post_id)``. Reject/reason are handled separately."""
+    """Parse ``approve:<id>`` / ``keep:<id>`` into ``(decision, post_id)``; others route above."""
     action, _, raw_id = data.partition(":")
-    if action != "approve" or not raw_id.isdigit():
+    if action not in ("approve", "keep") or not raw_id.isdigit():
         return None
     return action, int(raw_id)
 

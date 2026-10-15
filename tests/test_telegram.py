@@ -25,12 +25,20 @@ class _FakeNotifier:
         self.reason_pickers: list[tuple[dict, int]] = []
         self.edit_prompts: list[tuple[dict, int]] = []
         self.edited: list[tuple[int, int, Post]] = []
+        self.almost_marks: list[bool] = []
+        self.retried: list[int] = []
 
     async def send_suggestion(self, post: Post) -> None:
         self.suggestions.append(post)
 
-    async def mark_decided(self, cb_message: dict, post: Post, reason: str | None = None) -> None:
+    async def mark_decided(
+        self, cb_message: dict, post: Post, reason: str | None = None, almost: bool = False
+    ) -> None:
         self.marks.append((cb_message, post))
+        self.almost_marks.append(almost)
+
+    async def mark_retried(self, cb_message: dict, new_id: int) -> None:
+        self.retried.append(new_id)
 
     async def answer_callback(self, callback_query_id: str, text: str) -> None:
         self.toasts.append((callback_query_id, text))
@@ -38,8 +46,11 @@ class _FakeNotifier:
     async def send_message(self, text: str) -> None:
         self.messages.append(text)
 
-    async def show_reason_picker(self, cb_message: dict, post_id: int) -> None:
+    async def show_reason_picker(
+        self, cb_message: dict, post_id: int, almost: bool = False
+    ) -> None:
         self.reason_pickers.append((cb_message, post_id))
+        self.almost_marks.append(almost)
 
     async def prompt_edit(self, cb_message: dict, post_id: int) -> None:
         self.edit_prompts.append((cb_message, post_id))
@@ -493,7 +504,10 @@ async def test_status_shows_learning_counts(session: AsyncSession) -> None:
     await process_message(session, _FakeNotifier(), _fix_reply(post.id, "תיקון"), _OWNER_SETTINGS)
     notifier = _FakeNotifier()
     await process_message(session, notifier, _msg(_OWNER_ID, "/status"), _OWNER_SETTINGS)
-    assert "learning: 1 examples · 1 edits · 0 recent · 0 reject hints" in notifier.messages[0]
+    assert "learning: 1 ✅ · 0 🤏 · 0 ❌ (last 30d)" in notifier.messages[0]
+    assert (
+        "1 examples · 1 edits · 0 recent · 0 reject hints · 0 near-misses" in notifier.messages[0]
+    )
 
 
 async def test_reply_to_photo_card_is_not_an_edit(session: AsyncSession) -> None:
@@ -506,3 +520,67 @@ async def test_reply_to_photo_card_is_not_an_edit(session: AsyncSession) -> None
     }
     await process_message(session, notifier, msg, _OWNER_SETTINGS)
     assert notifier.messages == []
+
+
+# ─────────────────────────────── M9.1 verdicts ───────────────────────────────
+
+
+async def test_keep_callback_keeps_and_stays_off_queue(session: AsyncSession) -> None:
+    post = (await generate.generate_batch(session, n=1, brand="b"))[0]
+    notifier = _FakeNotifier()
+    await process_callback(session, notifier, _photo_cb(post.id, "keep"), _OWNER_SETTINGS)
+    assert notifier.toasts[-1][1] == "📚 Kept (learning only)"
+    assert notifier.marks[-1][1].status == PostStatus.KEPT
+    await process_message(session, notifier, _msg(_OWNER_ID, "/queue"), _OWNER_SETTINGS)
+    assert notifier.messages[-1] == "Queue is empty."
+    await process_message(
+        session, notifier, _msg(_OWNER_ID, f"/postnow {post.id}"), _OWNER_SETTINGS
+    )
+    assert notifier.messages[-1] == f"Post #{post.id} is kept (learning only) — tap 📤 on its card"
+    # 📤 Publish after all = approve:<id>
+    await process_callback(session, notifier, _photo_cb(post.id, "approve"), _OWNER_SETTINGS)
+    assert notifier.marks[-1][1].status == PostStatus.APPROVED
+
+
+async def test_almost_picker_then_chip_then_retry(session: AsyncSession) -> None:
+    post = (await generate.generate_batch(session, n=1, brand="b"))[0]
+    notifier = _FakeNotifier()
+    await process_callback(session, notifier, _photo_cb(post.id, "almost"), _OWNER_SETTINGS)
+    assert notifier.toasts[-1][1] == "What's off?" and notifier.almost_marks[-1] is True
+
+    await process_callback(session, notifier, _photo_cb(post.id, "almostr"), _OWNER_SETTINGS)
+    assert notifier.marks == []  # malformed (no chip) → ignored
+    cb = _photo_cb(post.id, "almostr")
+    cb["data"] = f"almostr:{post.id}:hebrew"
+    await process_callback(session, notifier, cb, _OWNER_SETTINGS)
+    assert notifier.toasts[-1][1] == "🤏 Almost (hebrew)"
+    assert notifier.marks[-1][1].status == PostStatus.REJECTED and notifier.almost_marks[-1]
+    fb = await _feedback(session, post.id)
+    assert [(f.decision, f.reason) for f in fb] == [("almost", "hebrew")]
+
+    await process_callback(session, notifier, _photo_cb(post.id, "retry"), _OWNER_SETTINGS)
+    assert notifier.toasts[-1][1] == "🔁 Generating a retry…"
+    new = notifier.suggestions[-1]
+    assert new.retry_of == post.id and new.image_ref == post.image_ref
+    assert notifier.retried == [new.id]
+    # stale Retry button: no second post, answered with the existing one
+    await process_callback(session, notifier, _photo_cb(post.id, "retry"), _OWNER_SETTINGS)
+    assert notifier.toasts[-1][1] == f"Already retried → #{new.id}"
+    assert len(notifier.suggestions) == 1
+
+
+async def test_almost_ban_chip_is_refused(session: AsyncSession) -> None:
+    post = (await generate.generate_batch(session, n=1, brand="b"))[0]
+    cb = _photo_cb(post.id, "almostr")
+    cb["data"] = f"almostr:{post.id}:ban_image"
+    await process_callback(session, _FakeNotifier(), cb, _OWNER_SETTINGS)
+    await session.refresh(post)
+    assert post.status == PostStatus.SUGGESTED
+    assert (await session.scalars(select(BannedImage))).all() == []
+
+
+async def test_retry_of_non_almost_is_refused(session: AsyncSession) -> None:
+    post = (await generate.generate_batch(session, n=1, brand="b"))[0]
+    notifier = _FakeNotifier()
+    await process_callback(session, notifier, _photo_cb(post.id, "retry"), _OWNER_SETTINGS)
+    assert notifier.suggestions == [] and "nothing to retry" in notifier.messages[-1]
