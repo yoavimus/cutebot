@@ -128,13 +128,13 @@ pauses slot jobs, `/postnow` refusal, catch-up uses stored slots.
 
 - **Slash menu** (the native "/" list, `setMyCommands`): one table drives the menu and
   `/help` — `_COMMANDS: list[tuple[group, command, menu_label, usage]]`. Menu labels are
-  emoji-prefixed, verb-first, ≤ 32 chars so they don't truncate on a phone; argument hints
-  move out of the menu into `/help`. Order = frequency, settings last:
-  `status 📊 Pipeline, queue and stock counts` · `queue 📬 Approved posts, in order` ·
-  `pending 🔔 Resend cards awaiting review` · `generate ✨ Draft a batch now` ·
-  `postnow ▶️ Publish the next queued post` · `stock 📷 Stock library` ·
-  `schedule 🗓 View or change the slots` · `mode 🎓 Learning / live` ·
-  `distill 📝 Propose a brand.md revision` · `help ❓ All commands + arguments`.
+  plain text (no emoji), verb-first, ≤ 32 chars so they don't truncate on a phone;
+  argument hints move out of the menu into `/help`. Order = frequency, settings last:
+  `status Pipeline, queue and stock counts` · `queue Approved posts, in order` ·
+  `pending Resend cards awaiting review` · `generate Draft a batch now` ·
+  `postnow Publish the next queued post` · `stock Stock library` ·
+  `schedule View or change the slots` · `mode Learning / live` ·
+  `distill Propose a brand.md revision` · `help All commands + arguments`.
   `requeue` leaves the menu (rare; still a typed command, listed in `/help`). The list
   is registered with `scope: {type: chat, chat_id: owner}` so only the owner's chat
   shows it; the default scope stays empty.
@@ -152,7 +152,7 @@ pauses slot jobs, `/postnow` refusal, catch-up uses stored slots.
   generated from the same table.
 - `send_message(text, *, html=False, keyboard=None)` grows the two keyword args; every
   existing call stays valid.
-- Tests: menu payload shape (labels ≤ 32 chars, owner scope), `/help` lists every
+- Tests: menu payload shape (labels ≤ 32 chars, no emoji, owner scope), `/help` lists every
   command incl. `requeue`, HTML escaping of captions in `/queue`, the new callbacks
   route to the existing functions.
 
