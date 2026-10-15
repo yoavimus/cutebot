@@ -73,27 +73,57 @@ python -m app.notifier.telegram set-webhook
 python -m app.notifier.telegram delete-webhook
 ```
 
-### Bot commands (owner-gated; work in dev and prod — M6)
+### Bot commands (owner-gated; work in dev and prod — M6, M9)
+
+One table (`_COMMANDS` in `app/notifier/telegram.py`) drives both the native "/" menu and
+the grouped `/help`. Output is HTML; values are escaped.
 
 ```
-/status          counts by status, queue depth, stock counts, learning counts, last 5 published
-/generate [N]    generate N suggestions now (default BATCH_SIZE) + DM for review
-/postnow [id]    publish front-of-queue, or a specific APPROVED post by id
-/queue           approved posts in queue order
-/pending         re-DM undecided suggestions (lost-DM recovery)
-/requeue <id>    move a FAILED post back into the queue
-/stock           unused / used / banned counts + banned list; /stock unban <file>
-/distill         propose a brand.md revision from recent feedback (✅ Apply / ❌ Discard)
-/help            this list (also /start)
-(photo DM)       save the photo into the stock library
+Pipeline
+/status                 mode header, counts by status, queue depth, stock, learning verdicts, last 5 published
+/queue                  approved posts in order — each row has ▶ Post now / ❌ Drop buttons
+/pending                re-DM undecided suggestions (count line first)
+/generate [n]           generate n suggestions now (default BATCH_SIZE) + DM for review
+/postnow [id]           publish front-of-queue, or a specific APPROVED post (refused in learning mode / on kept)
+/requeue <id>           move a FAILED post back into the queue (typed only — not in the menu)
+Library
+/stock [unban <file>]   unused / used / banned counts; banned rows have ♻️ Unban buttons
+Settings
+/schedule               current generation cron + slots (SCHEDULE_TZ) with next-run times
+/schedule post 12:00,18:00      1–6 HH:MM slots, applied without a restart
+/schedule generate 09:00        daily at, or a raw cron: "0 9 * * 1-5"
+/schedule reset                 back to the env defaults
+/mode [learning|live]   bare /mode shows a confirm keyboard; learning: ✅ = 📚 Keep, slots paused, /postnow refused
+/distill                propose a brand.md revision from recent feedback (✅ Apply / ❌ Discard)
+/help                   grouped list (also /start)
+(photo DM)              save the photo into the stock library
 ```
 
-The same list is registered with `setMyCommands` at startup, so Telegram's blue
-**Menu** button shows every command. Rejecting a post (❌) offers one-tap reason chips
-(voice/hebrew/image/boring/skip) — stored on `Feedback.reason`, the learning-loop
-signal — plus **🚫 Ban image**, which also retires the photo from future batches
-(`banned_images` table; the file stays on disk so `/media` keeps serving). Images used
-by approved/published posts are never recycled; a short batch DMs a low-stock warning.
+**Slash menu** — registered with `setMyCommands` at startup, scoped to the owner chat
+(`scope: {type: chat, chat_id}`); if Telegram rejects the scoped call it falls back to the
+default scope so the menu never disappears. Labels are plain text, ≤ 32 chars; `/requeue`
+is not in the menu. After changing labels, restart so the app re-registers them.
+
+**Card keyboard** (M9.1): `✅ Approve · 📚 Keep · ✏️ Fix` / `🤏 Almost · ❌ Reject`.
+
+| Callback data | Does |
+|---|---|
+| `approve:<id>` | approve (publish) — in learning mode behaves as Keep; also 📤 Publish after all on a kept card |
+| `keep:<id>` | 📚 approved for learning only — never queued, never published |
+| `reject:<id>` → `reason:<id>:<chip\|skip\|ban_image>` | reject, optional reason chip; `ban_image` retires the photo |
+| `almost:<id>` → `almostr:<id>:<chip\|skip>` | 🤏 right direction, flawed; post ends `rejected`, Feedback `almost` |
+| `retry:<id>` | 🔁 re-caption an Almost'd post's image as a new card (`Post.retry_of`) |
+| `fix:<id>` | ForceReply prompt for the corrected caption |
+| `postnow:<id>` / `drop:<id>` | `/queue` row buttons → `publish_by_id` / reject (owner-gated) |
+| `unban:<ref>` | `/stock` row button; refs over Telegram's 64-byte callback cap show the typed command instead |
+| `mode:learning` / `mode:live` / `mode:cancel` | `/mode` confirm keyboard (owner-gated) |
+| `distill:apply\|discard:<token>` | `/distill` proposal (owner-gated) |
+
+Rejecting a post (❌) offers one-tap reason chips (voice/hebrew/image/boring/skip) —
+stored on `Feedback.reason`, the learning-loop signal — plus **🚫 Ban image**, which also
+retires the photo from future batches (`banned_images` table; the file stays on disk so
+`/media` keeps serving). Images used by approved/kept/published posts are never recycled;
+a short batch DMs a low-stock warning.
 
 **✏️ Fix** (M8.2) sits next to Approve/Reject (and on approved cards). Tap → the bot
 asks you to *reply* with the corrected Hebrew caption (prefix `en:` to fix the English

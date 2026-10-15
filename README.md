@@ -76,7 +76,10 @@ one-tap reject reasons, a full operator console over Telegram commands
 **Instagram publishing is live** (Graph API, first real post 2026-10-05); TikTok / X
 remain logging stubs. **Learning loop v1** (2026-10-13): every caption is generated
 with your approved posts, ✏️ Fix corrections and reject reasons as context, and
-`/distill` proposes brand-file revisions from the same evidence.
+`/distill` proposes brand-file revisions from the same evidence. **Bot console v2**
+(2026-10-15): 📚 Keep / 🤏 Almost / 🔁 Retry verdicts so you can train without
+publishing, `/mode learning|live` and `/schedule` from the chat, a tidy slash menu
+with HTML output and one-tap buttons on `/queue` and `/stock`.
 
 ## Docs map
 
@@ -89,7 +92,7 @@ with your approved posts, ✏️ Fix corrections and reject reasons as context, 
 | `CLAUDE.md` | Instructions for Claude Code sessions in this repo |
 | `docs/INSTAGRAM_RUNBOOK.md` | Meta app / token setup and renewal (owner-side, living) |
 | `docs/plans/` | The active milestone plan (`<ticket>.md`); empty between milestones |
-| `docs/archive/` | Shipped milestone plans (M0–M8), the post-v1 review, the M8 kickoff prompt |
+| `docs/archive/` | Shipped milestone plans (M0–M9), the post-v1 review, the M8/M9 kickoff prompts |
 | `docs/issues/` | Owner issue lists and the findings/decisions written against them |
 | `docs/brand.example.md` | Template for the gitignored `brand.md` the generator reads |
 

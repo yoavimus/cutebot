@@ -29,7 +29,7 @@ publishes them on a fixed schedule — learning from every approve/reject.
 | Stage | Trigger | Module | Output |
 |-------|---------|--------|--------|
 | 1. Generate | `GENERATION_CRON` (default 9am daily) | `app/pipeline/generate.py` | N `Post` rows, status `suggested` — each starts from a stock image, then a caption written to match it |
-| 2. Review | immediately after generation | `app/pipeline/review.py` + `app/notifier/` | each post DM'd with Approve/Reject; `Feedback` row on decision |
+| 2. Review | immediately after generation | `app/pipeline/review.py` + `app/notifier/` | each post DM'd with Approve / Keep / Fix / Almost / Reject; `Feedback` row on decision |
 | 3. Queue | on Approve | `app/pipeline/queue.py` | post moves to status `approved`, ordered in queue |
 | 4. Publish | each slot in `POSTING_SLOTS` | `app/pipeline/publish.py` + `app/publishers/` | front-of-queue post → all networks; status `published` |
 
@@ -37,11 +37,18 @@ publishes them on a fixed schedule — learning from every approve/reject.
 
 ```
 suggested ──approve──▶ approved ──slot reached──▶ publishing ──ok──▶ published
-    │                                                  │
-    └──reject──▶ rejected                              └──error──▶ failed
+    │  │                 ▲                              │
+    │  └──keep──▶ kept ──┘ (📤 Publish after all)       └──error──▶ failed
+    └──reject / almost──▶ rejected
 ```
 
-Rejections and approvals both write a `Feedback` row (the training signal).
+Every verdict writes a `Feedback` row (the training signal). `kept` (M9) is a terminal
+"good post, learning only" status — never queued, never published; promoting it goes
+through the normal approve transition, so the approval gate keeps one door. `almost` is a
+*decision*, not a status: the post ends `rejected` and a retry is a new `suggested` post
+on the same image (`Post.retry_of`). In **learning mode** (`/mode learning`) ✅ is
+recorded as Keep and publishing is refused at the review/publish doors, not only by
+pausing jobs.
 
 ## 3. Architecture
 
@@ -101,13 +108,13 @@ external worker in v1 — the scheduler runs in the app process.
 ## 4. Data model (`app/models.py`)
 
 - **Post** — `id, image_ref, caption_he, caption_en, visual_concept, rationale, status,
-  created_at, decided_at, published_at, queue_position, source_batch_id`. `image_ref` is
+  created_at, decided_at, published_at, queue_position, source_batch_id, retry_of`. `image_ref` is
   chosen **first** — it points at the selected stock image (a path/key into the owner's
   stock library) — and `caption_he` (primary) / `caption_en` / `visual_concept` are then
   written to match it. The AI-disclosure line is **not** stored per row; it's composed
   from the configured template at review/publish time so one edit updates every post.
   Image *generation* is out of scope (see §3, §8.B).
-- **Feedback** — `id, post_id, decision (approve|reject), reason, edit_lang,
+- **Feedback** — `id, post_id, decision (approve|reject|almost), reason, edit_lang,
   edit_before, edit_after, created_at` — the training signal. `reason` is the one-tap
   reject chip; the `edit_*` triple records an owner correction (✏️ Fix), the strongest
   signal. `app/learning.py` turns this table into the context fed to every caption.
@@ -115,6 +122,9 @@ external worker in v1 — the scheduler runs in the app process.
   generation run.
 - **BannedImage** — `image_ref, banned_at` — stock images retired from future batches
   (🚫 Ban image); the file stays on disk.
+- **Setting** (`settings`) — `key, value, updated_at` — runtime preferences the bot can
+  change: `mode` (`live`|`learning`), `generation_cron`, `posting_slots`. A missing row
+  falls back to the env default (`app/prefs.py`); M10 adds `brand_id`.
 
 ## 5. Stack
 
