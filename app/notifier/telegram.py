@@ -22,6 +22,7 @@ Run modes (CLI):
 from __future__ import annotations
 
 import asyncio
+import html as html_lib
 import json
 import logging
 import re
@@ -67,20 +68,36 @@ _EDIT_PROMPT = (
 _EDIT_MARKER = "Reply to this message with the corrected"
 _EDIT_REF = re.compile(r"post #(\d+) · card (\d+)")
 
-# Shown in Telegram's "/" menu (setMyCommands) and by /help. Order = menu order.
-_COMMAND_HELP: list[tuple[str, str]] = [
-    ("status", "pipeline counts, queue depth, stock"),
-    ("pending", "resend every suggestion awaiting review"),
-    ("queue", "approved posts in posting order"),
-    ("generate", "generate a batch now: /generate [n]"),
-    ("postnow", "publish next in queue, or /postnow <id>"),
-    ("requeue", "put a failed post back: /requeue <id>"),
-    ("stock", "stock library counts; /stock unban <file>"),
-    ("schedule", "view / change slots: /schedule post 12:00,18:00 · generate 09:00 · reset"),
-    ("mode", "/mode learning (✅ = Keep, nothing posts) or /mode live"),
-    ("distill", "propose a brand.md revision from recent feedback"),
-    ("help", "this list"),
+# One table drives Telegram's "/" menu (setMyCommands) and the grouped /help.
+# (group, command, menu_label, usage). Row order = menu order (frequency, settings last).
+# menu_label: plain text, no emoji, verb-first, ≤ 32 chars so phones don't truncate;
+# "" keeps a command out of the menu (still typed, still in /help). usage = args + detail,
+# shown by /help only.
+_MENU_LABEL_MAX = 32
+_COMMANDS: list[tuple[str, str, str, str]] = [
+    ("Pipeline", "status", "Pipeline, queue and stock counts", "— counts, mode, verdicts"),
+    ("Pipeline", "queue", "Approved posts, in order", "— approved posts; ▶ / ❌ per row"),
+    ("Pipeline", "pending", "Resend cards awaiting review", "— resend every open card"),
+    ("Pipeline", "generate", "Draft a batch now", "[n] — draft n posts now"),
+    ("Pipeline", "postnow", "Publish the next queued post", "[id] — publish next, or post #id"),
+    ("Pipeline", "requeue", "", "<id> — put a failed post back in the queue"),
+    ("Library", "stock", "Stock library", "[unban <file>] — counts, banned list"),
+    (
+        "Settings",
+        "schedule",
+        "View or change the slots",
+        "[post 12:00,18:00 | generate 09:00 | reset]",
+    ),
+    ("Settings", "mode", "Learning / live", "[learning|live] — learning: ✅ = Keep, nothing posts"),
+    ("Settings", "distill", "Propose a brand.md revision", "— from recent feedback"),
+    ("Settings", "help", "All commands + arguments", ""),
 ]
+_HELP_CARD = (
+    "✅ Approve — publish · 📚 Keep — good, learning only, never posts · ✏️ Fix — reply with the "
+    'corrected Hebrew caption ("en:" for English) · 🤏 Almost — right direction, pick what\'s '
+    "off, then 🔁 Retry the same photo · ❌ Reject — pick a reason; 🚫 Ban image retires the photo"
+)
+_CALLBACK_DATA_MAX = 64  # bytes, Telegram's cap
 
 
 class TelegramNotifier:
@@ -148,26 +165,52 @@ class TelegramNotifier:
                     resp.json().get("description"),
                 )
 
-    async def send_message(self, text: str) -> None:
+    async def send_message(
+        self,
+        text: str,
+        *,
+        html: bool = False,
+        keyboard: list[list[dict[str, str]]] | None = None,
+    ) -> None:
+        """DM the owner. ``html=True`` sends ``parse_mode=HTML`` (caller escapes values);
+        ``keyboard`` is inline-keyboard rows."""
         if not self._settings.telegram_bot_token or not self._settings.telegram_chat_id:
             logger.warning("Telegram not configured — skipping send_message.")
             return
+        body: dict[str, Any] = {"chat_id": self._settings.telegram_chat_id, "text": text}
+        if html:
+            body["parse_mode"] = "HTML"
+        if keyboard:
+            body["reply_markup"] = {"inline_keyboard": keyboard}
         async with httpx.AsyncClient(timeout=15) as client:
-            await client.post(
-                self._url("sendMessage"),
-                json={"chat_id": self._settings.telegram_chat_id, "text": text},
-            )
+            resp = await client.post(self._url("sendMessage"), json=body)
+        if html and not resp.json().get("ok"):
+            # Malformed markup must not swallow the message: resend as plain text.
+            logger.warning("HTML sendMessage rejected: %s", resp.json().get("description"))
+            plain = html_lib.unescape(re.sub(r"<[^>]+>", "", text))
+            await self.send_message(plain, keyboard=keyboard)
 
     async def set_my_commands(self) -> None:
-        """Register the command list so Telegram shows its native Menu button."""
+        """Register the "/" menu for the owner's chat; fall back to the default scope."""
         if not self._settings.telegram_bot_token:
             return
-        commands = [{"command": c, "description": d} for c, d in _COMMAND_HELP]
+        commands = [
+            {"command": cmd, "description": label} for _, cmd, label, _ in _COMMANDS if label
+        ]
+        owner = self._settings.telegram_chat_id
+        attempts: list[dict[str, Any]] = []
+        if owner:
+            attempts.append({"scope": {"type": "chat", "chat_id": owner}})
+        attempts.append({})  # default scope — the menu must never disappear
         try:
             async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.post(self._url("setMyCommands"), json={"commands": commands})
-            if not resp.json().get("ok"):
-                logger.warning("setMyCommands rejected: %s", resp.json().get("description"))
+                for extra in attempts:
+                    resp = await client.post(
+                        self._url("setMyCommands"), json={"commands": commands, **extra}
+                    )
+                    if resp.json().get("ok"):
+                        return
+                    logger.warning("setMyCommands rejected: %s", resp.json().get("description"))
         except Exception as exc:  # noqa: BLE001 — a menu glitch must never block startup
             logger.warning("setMyCommands failed: %s", exc)
 
@@ -353,23 +396,23 @@ async def _build_status_summary(session: AsyncSession, settings: Settings) -> st
             .limit(5)
         )
     ).all()
+    e = html_lib.escape
     lines = []
     if await prefs.mode(session) == prefs.LEARNING:
-        lines.append("🎓 LEARNING MODE — nothing publishes\n")
-    lines.append("Pipeline status")
-    for s in PostStatus:
-        n = counts.get(s, 0)
-        if n:
-            lines.append(f"  {s}: {n}")
+        lines.append("🎓 <b>LEARNING MODE</b> — nothing publishes\n")
+    lines.append("<b>Pipeline</b>")
+    block = [f"{s:<10} {counts[s]}" for s in PostStatus if counts.get(s, 0)]
     queue_depth = counts.get(PostStatus.APPROVED, 0) + counts.get(PostStatus.PUBLISHING, 0)
-    lines.append(f"\nQueue depth: {queue_depth}")
-    lines.append(stock.summary_line(await stock.counts(session, settings)))
-    lines.append(await _learning_line(session, settings))
+    block.append(f"{'queue':<10} {queue_depth}")
+    lines.append("<code>" + e("\n".join(block)) + "</code>")
+    lines.append("\n<b>Stock</b>\n" + e(stock.summary_line(await stock.counts(session, settings))))
+    lines.append("\n<b>Learning</b>\n" + e(await _learning_line(session, settings)))
     if recent:
-        lines.append("\nLast published:")
+        pub = []
         for p in recent:
             ts = p.published_at.strftime("%Y-%m-%d %H:%M UTC") if p.published_at else "?"
-            lines.append(f"  #{p.id} — {ts}")
+            pub.append(f"#{p.id} — {ts}")
+        lines.append("\n<b>Last published</b>\n<code>" + e("\n".join(pub)) + "</code>")
     return "\n".join(lines)
 
 
@@ -392,21 +435,19 @@ async def _learning_line(session: AsyncSession, settings: Settings) -> str:
 async def _cmd_status(
     session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
 ) -> None:
-    await notifier.send_message(await _build_status_summary(session, settings))
+    await notifier.send_message(await _build_status_summary(session, settings), html=True)
 
 
 async def _cmd_help(
     session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
 ) -> None:
-    lines = ["Commands:"] + [f"/{c} — {d}" for c, d in _COMMAND_HELP]
-    lines.append(
-        "\nReview cards: ✅ Approve (publish) · 📚 Keep (good, learning only — never posts)"
-        ' · ✏️ Fix (reply with the corrected Hebrew caption; "en:" prefix for English)'
-        " · 🤏 Almost (right direction, flawed — pick what's off, then 🔁 Retry the same photo)"
-        " · ❌ Reject (pick a reason; 🚫 Ban image retires the photo)."
-    )
-    lines.append("Send a photo to add it to the stock library.")
-    await notifier.send_message("\n".join(lines))
+    e = html_lib.escape
+    lines = ["<b>Review a card</b>", e(_HELP_CARD)]
+    for group in dict.fromkeys(g for g, *_ in _COMMANDS):
+        lines.append(f"\n<b>{group}</b>")
+        lines += [f"/{c} {e(u)}".rstrip() for g, c, _, u in _COMMANDS if g == group]
+    lines.append("\nSend a photo to add it to the stock library.")
+    await notifier.send_message("\n".join(lines), html=True)
 
 
 async def _cmd_stock(
@@ -426,10 +467,17 @@ async def _cmd_stock(
     banned = (
         await session.scalars(select(BannedImage.image_ref).order_by(BannedImage.image_ref))
     ).all()
-    lines = [stock.summary_line(c)]
-    if banned:
-        lines.append("Banned: " + ", ".join(banned))
-    await notifier.send_message("\n".join(lines))
+    e = html_lib.escape
+    lines = [e(stock.summary_line(c))]
+    keyboard: list[list[dict[str, str]]] = []
+    for ref in banned:
+        data = f"unban:{ref}"
+        if len(data.encode()) <= _CALLBACK_DATA_MAX:
+            lines.append(f"🚫 <code>{e(ref)}</code>")
+            keyboard.append([_btn(f"♻️ Unban {ref}", data)])
+        else:  # too long for callback data — the typed command still works
+            lines.append(f"🚫 <code>{e(ref)}</code> — /stock unban {e(ref)}")
+    await notifier.send_message("\n".join(lines), html=True, keyboard=keyboard or None)
 
 
 async def _cmd_generate(
@@ -483,12 +531,26 @@ async def _cmd_mode(
 ) -> None:
     current = await prefs.mode(session)
     want = args.lower().strip()
-    if not want:
-        await notifier.send_message(f"Mode: {current}")
+    if not want:  # confirmation keyboard: mode must not flip by accident
+        await notifier.send_message(
+            f"Mode: <b>{current}</b>\nSwitch to:",
+            html=True,
+            keyboard=[
+                [
+                    _btn("🎓 Learning", f"mode:{prefs.LEARNING}"),
+                    _btn("🚀 Live", f"mode:{prefs.LIVE}"),
+                    _btn("Cancel", "mode:cancel"),
+                ]
+            ],
+        )
         return
     if want not in (prefs.LIVE, prefs.LEARNING):
         await notifier.send_message("Usage: /mode learning | /mode live")
         return
+    await _set_mode(session, notifier, want)
+
+
+async def _set_mode(session: AsyncSession, notifier: TelegramNotifier, want: str) -> None:
     await prefs.set(session, prefs.MODE, want)
     scheduler = notifier.scheduler
     if scheduler is not None:
@@ -590,11 +652,16 @@ async def _cmd_queue(
     if not posts:
         await notifier.send_message("Queue is empty.")
         return
-    lines = [f"Queue ({len(posts)} post(s)):"]
+    e = html_lib.escape
+    lines = [f"<b>Queue</b> ({len(posts)} post(s))"]
+    keyboard = []
     for p in posts:
         preview = (p.caption_he[:60] + "…") if len(p.caption_he) > 60 else p.caption_he
-        lines.append(f"  #{p.id} [pos {p.queue_position}] {preview}")
-    await notifier.send_message("\n".join(lines))
+        lines.append(f"#{p.id} · pos {p.queue_position} · {e(preview)}")
+        keyboard.append(
+            [_btn(f"▶ Post now #{p.id}", f"postnow:{p.id}"), _btn("❌ Drop", f"drop:{p.id}")]
+        )
+    await notifier.send_message("\n".join(lines), html=True, keyboard=keyboard)
 
 
 async def _cmd_requeue(
@@ -626,7 +693,7 @@ async def _cmd_pending(
     if not posts:
         await notifier.send_message("No pending posts.")
         return
-    await notifier.send_message(f"Resending {len(posts)} pending post(s)…")
+    await notifier.send_message(f"<b>{len(posts)} pending post(s)</b> — resending…", html=True)
     await _rev.send_for_review(list(posts), notifier)
 
 
@@ -644,7 +711,7 @@ async def _cmd_distill(
         await notifier.send_distill(result)
 
 
-_COMMANDS: dict[str, Any] = {
+_HANDLERS: dict[str, Any] = {
     "/status": _cmd_status,
     "/generate": _cmd_generate,
     "/postnow": _cmd_postnow,
@@ -738,7 +805,7 @@ async def process_message(
             return
         cmd, _, args = text.partition(" ")
         cmd = cmd.split("@")[0].lower()
-        handler = _COMMANDS.get(cmd)
+        handler = _HANDLERS.get(cmd)
         if handler:
             await handler(session, notifier, args.strip(), settings)
         return
@@ -775,6 +842,11 @@ async def process_callback(
             return
         await notifier.mark_distilled(cb["message"], label)
         await notifier.answer_callback(cb["id"], label)
+        return
+
+    # ── console buttons (/queue, /stock, /mode): state-changing, so owner-gated ──
+    if data.startswith(("postnow:", "drop:", "unban:", "mode:")):
+        await _console_callback(session, notifier, cb, settings or get_settings())
         return
 
     # ── Step 1: ❌ / 🤏 tap → show reason picker ─────────────────────────────
@@ -913,6 +985,38 @@ async def process_callback(
         toast,
     )
     await notifier.answer_callback(cb["id"], toast)
+
+
+async def _console_callback(
+    session: AsyncSession, notifier: TelegramNotifier, cb: dict, settings: Settings
+) -> None:
+    """``postnow:<id>`` / ``drop:<id>`` / ``unban:<ref>`` / ``mode:<learning|live|cancel>``."""
+    if str(cb["message"]["chat"]["id"]) != str(settings.telegram_chat_id):
+        logger.warning("Ignoring console callback from non-owner chat.")
+        return
+    action, _, arg = cb.get("data", "").partition(":")
+    if action == "postnow" and arg.isdigit():
+        await notifier.answer_callback(cb["id"], f"▶ Publishing #{arg}…")
+        await _cmd_postnow(session, notifier, arg, settings)
+    elif action == "drop" and arg.isdigit():
+        pre = await session.get(Post, int(arg))
+        post = await handle_decision(session, int(arg), "reject")
+        if post is None:
+            toast = "Post not found"
+        elif pre is not None and pre.status in _TERMINAL_CB:
+            toast = "Can't drop — already published"
+        else:
+            toast = f"❌ Dropped #{post.id}"
+        await notifier.answer_callback(cb["id"], toast)
+    elif action == "unban" and arg:
+        ok = await stock.unban_image(session, arg)
+        await session.commit()
+        await notifier.answer_callback(cb["id"], "♻️ Back in the pool" if ok else "Not banned")
+    elif action == "mode" and arg in (prefs.LEARNING, prefs.LIVE):
+        await notifier.answer_callback(cb["id"], f"Mode → {arg}")
+        await _set_mode(session, notifier, arg)
+    elif action == "mode" and arg == "cancel":
+        await notifier.answer_callback(cb["id"], "Cancelled")
 
 
 def parse_callback(data: str) -> tuple[str, int] | None:

@@ -17,10 +17,14 @@ from app.schemas import PostSuggestion
 
 
 class _FakeNotifier:
+    scheduler = None
+
     def __init__(self) -> None:
         self.marks: list[tuple[dict, Post]] = []
         self.toasts: list[tuple[str, str]] = []
         self.messages: list[str] = []
+        self.keyboards: list[list | None] = []
+        self.html: list[bool] = []
         self.suggestions: list[Post] = []
         self.reason_pickers: list[tuple[dict, int]] = []
         self.edit_prompts: list[tuple[dict, int]] = []
@@ -43,8 +47,12 @@ class _FakeNotifier:
     async def answer_callback(self, callback_query_id: str, text: str) -> None:
         self.toasts.append((callback_query_id, text))
 
-    async def send_message(self, text: str) -> None:
+    async def send_message(
+        self, text: str, *, html: bool = False, keyboard: list | None = None
+    ) -> None:
         self.messages.append(text)
+        self.keyboards.append(keyboard)
+        self.html.append(html)
 
     async def show_reason_picker(
         self, cb_message: dict, post_id: int, almost: bool = False
@@ -289,7 +297,98 @@ async def test_help_lists_every_command(session: AsyncSession) -> None:
 
     notifier = _FakeNotifier()
     await process_message(session, notifier, _msg(_OWNER_ID, "/help"), _OWNER_SETTINGS)
-    assert all(cmd in notifier.messages[0] for cmd in _COMMANDS if cmd != "/start")
+    assert notifier.html == [True]
+    assert all(f"/{cmd}" in notifier.messages[0] for _, cmd, _, _ in _COMMANDS)
+    assert "/requeue" in notifier.messages[0]
+    for group in ("Review a card", "Pipeline", "Library", "Settings"):
+        assert f"<b>{group}</b>" in notifier.messages[0]
+
+
+def test_command_table_menu_labels() -> None:
+    import re
+
+    from app.notifier.telegram import _COMMANDS, _HANDLERS
+
+    labelled = [(c, label) for _, c, label, _ in _COMMANDS if label]
+    assert all(len(label) <= 32 for _, label in labelled)
+    assert all(re.fullmatch(r"[A-Za-z0-9 ,./+-]+", label) for _, label in labelled)  # no emoji
+    assert "requeue" not in [c for c, _ in labelled]
+    assert {f"/{c}" for _, c, _, _ in _COMMANDS} <= set(_HANDLERS)
+
+
+class _FakeHttp:
+    """Stands in for httpx.AsyncClient; records posts, answers from ``replies``."""
+
+    calls: list[tuple[str, dict]] = []
+    replies: list[dict] = []
+
+    def __init__(self, *a: object, **kw: object) -> None: ...
+    async def __aenter__(self) -> _FakeHttp:
+        return self
+
+    async def __aexit__(self, *a: object) -> None: ...
+
+    async def post(self, url: str, json: dict | None = None, **kw: object) -> object:
+        _FakeHttp.calls.append((url.rsplit("/", 1)[-1], json or {}))
+        reply = _FakeHttp.replies.pop(0) if _FakeHttp.replies else {"ok": True}
+
+        class _R:
+            def json(self) -> dict:
+                return reply
+
+        return _R()
+
+
+@pytest.fixture
+def fake_http(monkeypatch: pytest.MonkeyPatch) -> type[_FakeHttp]:
+    from app.notifier import telegram
+
+    _FakeHttp.calls, _FakeHttp.replies = [], []
+    monkeypatch.setattr(telegram.httpx, "AsyncClient", _FakeHttp)
+    return _FakeHttp
+
+
+async def test_set_my_commands_owner_scope(fake_http: type[_FakeHttp]) -> None:
+    from app.notifier.telegram import TelegramNotifier
+
+    await TelegramNotifier(_OWNER_SETTINGS).set_my_commands()
+    [(method, body)] = fake_http.calls
+    assert method == "setMyCommands"
+    assert body["scope"] == {"type": "chat", "chat_id": str(_OWNER_ID)}
+    cmds = [c["command"] for c in body["commands"]]
+    assert cmds[0] == "status" and cmds[-1] == "help" and "requeue" not in cmds
+    assert all(len(c["description"]) <= 32 for c in body["commands"])
+
+
+async def test_set_my_commands_falls_back_to_default_scope(fake_http: type[_FakeHttp]) -> None:
+    from app.notifier.telegram import TelegramNotifier
+
+    fake_http.replies = [{"ok": False, "description": "chat not found"}]
+    await TelegramNotifier(_OWNER_SETTINGS).set_my_commands()
+    assert len(fake_http.calls) == 2
+    assert "scope" in fake_http.calls[0][1] and "scope" not in fake_http.calls[1][1]
+
+
+async def test_send_message_html_and_keyboard(fake_http: type[_FakeHttp]) -> None:
+    from app.notifier.telegram import TelegramNotifier
+
+    n = TelegramNotifier(_OWNER_SETTINGS)
+    await n.send_message("plain")
+    await n.send_message("<b>x</b>", html=True, keyboard=[[{"text": "a", "callback_data": "b"}]])
+    assert "parse_mode" not in fake_http.calls[0][1]
+    assert fake_http.calls[1][1]["parse_mode"] == "HTML"
+    assert fake_http.calls[1][1]["reply_markup"] == {
+        "inline_keyboard": [[{"text": "a", "callback_data": "b"}]]
+    }
+
+
+async def test_send_message_html_rejected_resends_plain(fake_http: type[_FakeHttp]) -> None:
+    from app.notifier.telegram import TelegramNotifier
+
+    fake_http.replies = [{"ok": False, "description": "can't parse entities"}]
+    await TelegramNotifier(_OWNER_SETTINGS).send_message("<b>a &amp; b</b>", html=True)
+    assert "parse_mode" not in fake_http.calls[1][1]
+    assert fake_http.calls[1][1]["text"] == "a & b"
 
 
 async def test_stock_command_and_unban(session: AsyncSession, tmp_path: Path) -> None:
@@ -341,6 +440,92 @@ async def test_cmd_queue_with_posts(session: AsyncSession) -> None:
     await process_message(session, notifier, _msg(_OWNER_ID, "/queue"), _OWNER_SETTINGS)
     assert f"#{posts[0].id}" in notifier.messages[0]
     assert "1 post(s)" in notifier.messages[0]
+    assert notifier.html == [True]
+    row = notifier.keyboards[0][0]
+    assert [b["callback_data"] for b in row] == [f"postnow:{posts[0].id}", f"drop:{posts[0].id}"]
+
+
+async def test_cmd_queue_escapes_caption_html(session: AsyncSession) -> None:
+    posts = await generate.generate_batch(session, n=1, brand="b")
+    posts[0].caption_he = "a <b> & c"
+    await session.commit()
+    await review.handle_decision(session, posts[0].id, "approve")
+    notifier = _FakeNotifier()
+    await process_message(session, notifier, _msg(_OWNER_ID, "/queue"), _OWNER_SETTINGS)
+    assert "a &lt;b&gt; &amp; c" in notifier.messages[0]
+    assert "<b> &" not in notifier.messages[0]
+
+
+def _owner_cb(data: str) -> dict:
+    return {"id": "cq9", "data": data, "message": {"message_id": 5, "chat": {"id": _OWNER_ID}}}
+
+
+async def test_drop_callback_rejects_queued_post(session: AsyncSession) -> None:
+    posts = await generate.generate_batch(session, n=1, brand="b")
+    await review.handle_decision(session, posts[0].id, "approve")
+    n = _FakeNotifier()
+    await process_callback(session, n, _owner_cb(f"drop:{posts[0].id}"), _OWNER_SETTINGS)
+    await session.refresh(posts[0])
+    assert posts[0].status == PostStatus.REJECTED
+    assert n.toasts == [("cq9", f"❌ Dropped #{posts[0].id}")]
+
+
+async def test_postnow_callback_routes_to_publish(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.pipeline import publish
+
+    seen: list[int] = []
+
+    async def fake_publish(session: AsyncSession, post_id: int, publishers: object = None) -> Post:
+        seen.append(post_id)
+        post = await session.get(Post, post_id)
+        assert post is not None
+        post.status = PostStatus.PUBLISHED
+        return post
+
+    monkeypatch.setattr(publish, "publish_by_id", fake_publish)
+    posts = await generate.generate_batch(session, n=1, brand="b")
+    await review.handle_decision(session, posts[0].id, "approve")
+    n = _FakeNotifier()
+    await process_callback(session, n, _owner_cb(f"postnow:{posts[0].id}"), _OWNER_SETTINGS)
+    assert seen == [posts[0].id]
+    assert "published" in n.messages[0]
+
+
+async def test_unban_callback_and_long_ref_falls_back_to_text(session: AsyncSession) -> None:
+    await stock.ban_image(session, "a.jpg")
+    long_ref = "x" * 70 + ".jpg"
+    await stock.ban_image(session, long_ref)
+    await session.commit()
+    n = _FakeNotifier()
+    await process_message(session, n, _msg(_OWNER_ID, "/stock"), _OWNER_SETTINGS)
+    assert [b["callback_data"] for row in n.keyboards[0] for b in row] == ["unban:a.jpg"]
+    assert f"/stock unban {long_ref}" in n.messages[0]
+
+    await process_callback(session, n, _owner_cb("unban:a.jpg"), _OWNER_SETTINGS)
+    assert n.toasts[-1][1] == "♻️ Back in the pool"
+    assert await session.get(BannedImage, "a.jpg") is None
+
+
+async def test_mode_callbacks_confirm_and_cancel(session: AsyncSession) -> None:
+    from app import prefs
+
+    n = _FakeNotifier()
+    await process_callback(session, n, _owner_cb("mode:cancel"), _OWNER_SETTINGS)
+    assert await prefs.mode(session) == prefs.LIVE
+    await process_callback(session, n, _owner_cb("mode:learning"), _OWNER_SETTINGS)
+    assert await prefs.mode(session) == prefs.LEARNING
+    assert "Learning mode" in n.messages[-1]
+
+
+async def test_console_callbacks_ignore_non_owner(session: AsyncSession) -> None:
+    from app import prefs
+
+    n = _FakeNotifier()
+    cb = {"id": "c", "data": "mode:learning", "message": {"message_id": 1, "chat": {"id": 999}}}
+    await process_callback(session, n, cb, _OWNER_SETTINGS)
+    assert await prefs.mode(session) == prefs.LIVE and n.toasts == []
 
 
 # ─────────────────────────────── /requeue command ────────────────────────────

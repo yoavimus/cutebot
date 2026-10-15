@@ -32,11 +32,17 @@ class _Notifier:
     def __init__(self, scheduler: sched.CuteScheduler | None = None) -> None:
         self.scheduler = scheduler
         self.messages: list[str] = []
+        self.keyboards: list[list | None] = []
+        self.html: list[bool] = []
         self.toasts: list[str] = []
 
     async def send_suggestion(self, post: Post) -> None: ...
-    async def send_message(self, text: str) -> None:
+    async def send_message(
+        self, text: str, *, html: bool = False, keyboard: list | None = None
+    ) -> None:
         self.messages.append(text)
+        self.keyboards.append(keyboard)
+        self.html.append(html)
 
     async def answer_callback(self, callback_query_id: str, text: str) -> None:
         self.toasts.append(text)
@@ -146,7 +152,12 @@ async def test_mode_command_pauses_and_resumes_slot_jobs(session: AsyncSession) 
     try:
         n = _Notifier(s)
         await _cmd(session, n, "/mode")
-        assert n.messages[-1] == "Mode: live"
+        assert "Mode: <b>live</b>" in n.messages[-1]
+        assert [b["callback_data"] for b in n.keyboards[-1][0]] == [
+            "mode:learning",
+            "mode:live",
+            "mode:cancel",
+        ]
         await _cmd(session, n, "/mode learning")
         assert await prefs.mode(session) == "learning"
         assert all(j.next_run_time is None for j in _posting_jobs(s).values())
@@ -176,7 +187,7 @@ async def test_status_header_in_learning_mode(session: AsyncSession) -> None:
     await prefs.set(session, prefs.MODE, "learning")
     n = _Notifier()
     await _cmd(session, n, "/status")
-    assert n.messages[0].startswith("🎓 LEARNING MODE — nothing publishes")
+    assert n.messages[0].startswith("🎓 <b>LEARNING MODE</b> — nothing publishes")
 
 
 # ─────────────────────────────── schedule ────────────────────────────────────
@@ -192,7 +203,9 @@ async def test_apply_slots_replaces_job_ids() -> None:
 
 async def test_schedule_post_generate_reset(session: AsyncSession) -> None:
     s = sched.build_scheduler(
-        async_sessionmaker(), _Notifier(), _SETTINGS  # type: ignore[arg-type]
+        async_sessionmaker(),
+        _Notifier(),
+        _SETTINGS,  # type: ignore[arg-type]
     )
     s.start(paused=True)
     try:
@@ -264,4 +277,3 @@ async def test_unreadable_settings_table_boots_in_learning_mode() -> None:
         await engine.dispose()
     assert loaded.mode == "learning" and loaded.degraded
     assert loaded.slots == [(12, 0), (18, 0)]
-
