@@ -1,7 +1,8 @@
 # M9 — Bot console v2
 
-> **Draft 2026-10-14 — awaiting approval.** Epic + tickets created on approval (M9.1–M9.4).
-> Scope decided in `docs/issues/next_steps_13_10_2026.md` (items 1 + 2). This file is
+> **Approved 2026-10-15.** Linear: epic **CUT-68** · M9.1 **CUT-69** (verdicts) · M9.2 **CUT-70**
+> (mode + schedule) · M9.3 **CUT-71** (console UX); the M9.4 close-out checklist lives on the
+> epic. Scope decided in `docs/issues/next_steps_13_10_2026.md` (items 1 + 2). This file is
 > canonical for scope; the tickets carry the deliverable checklists.
 
 ## Context
