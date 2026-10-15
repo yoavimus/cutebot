@@ -24,11 +24,16 @@ class PostStatus(StrEnum):
     PUBLISHING = "publishing"
     PUBLISHED = "published"
     FAILED = "failed"
+    # 📚 Keep (M9): approved for learning only. Never queued, never published; promoting it
+    # to APPROVED goes through handle_decision like any approval.
+    KEPT = "kept"
 
 
 class Decision(StrEnum):
     APPROVE = "approve"
     REJECT = "reject"
+    # 🤏 Almost (M9): liked the direction, flawed execution. The post ends REJECTED.
+    ALMOST = "almost"
 
 
 class Batch(Base):
@@ -73,6 +78,9 @@ class Post(Base):
     batch_id: Mapped[int | None] = mapped_column(ForeignKey("batches.id"), default=None)
     batch: Mapped[Batch | None] = relationship(back_populates="posts")
 
+    # 🔁 Retry (M9): the 🤏 Almost'd post this one re-captions (same image).
+    retry_of: Mapped[int | None] = mapped_column(ForeignKey("posts.id"), default=None, index=True)
+
     feedback: Mapped[list[Feedback]] = relationship(back_populates="post")
 
 
@@ -106,3 +114,18 @@ class Feedback(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     post: Mapped[Post] = relationship(back_populates="feedback")
+
+
+class Setting(Base):
+    """Runtime preference (M9): ``mode`` / ``generation_cron`` / ``posting_slots``.
+
+    Plain key/value; no row = the env default (see ``app/prefs.py``). M10 adds ``brand_id``.
+    """
+
+    __tablename__ = "settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )

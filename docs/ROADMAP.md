@@ -33,6 +33,7 @@ the index. Details of what each one changed live in those plans and in git.
 | M7 — Instagram publisher | Graph adapter with container-resume + network-aware recovery, `/media` route, Meta approval, **first real post** (CUT-56…61) | 2026-10-05 | `docs/archive/M7_PLAN.md`, `docs/INSTAGRAM_RUNBOOK.md` |
 | Owner review round | `/help` + command menu, `/stock` + 🚫 Ban image, no stock recycling, eval cost column | 2026-10-05 | `docs/issues/cutebot_issues_05_10_2026*.md` |
 | M8 — Learning loop v1 | `app/learning.py` context in every caption, ✏️ Fix (edit = strongest signal, migration 0006), `--learning` eval flag, `/distill` brand proposals (CUT-63…67) | 2026-10-13 | `docs/archive/M8_PLAN.md` |
+| M9 — Bot console v2 | verdicts `📚 Keep` / `🤏 Almost` (+chips) / `🔁 Retry` (status `kept`, `Post.retry_of`, migration 0007), `/mode learning\|live` + `/schedule` from the bot (`settings` table, migration 0008), slash menu + HTML + inline drill-down buttons (CUT-68…71) | 2026-10-15 | `docs/archive/M9_PLAN.md` |
 
 ---
 
@@ -41,7 +42,6 @@ the index. Details of what each one changed live in those plans and in git.
 
 | # | Milestone | What ships | Size |
 |---|-----------|------------|------|
-| M9 | **Bot console v2** | reply keyboard + HTML output; `/schedule` (generation cron + posting slots from the bot, env stays the default); `/mode learning` + per-post `📚 Keep` (approved for learning only — new `kept` status, never queued); `🤏 Almost` verdict with optional reason chips + `🔁 Retry` on the same image; near-miss block in the learning context | 1 wk |
 | M10 | **Tenant seam** | `brands` table (one default row), `brand_id` on posts/batches/feedback/banned_images/settings, brand text moves into the DB (`/distill` edits the row), `cost_usd` per batch/post. Nothing visible changes | 2–3 d |
 | M11 | **Media v2** | Telegram files + albums (full quality), `/stock` paging with thumbnails + inline ban/delete, **Google Drive folder sync** (owner shares a folder with the bot's service account; nightly + `/sync`; posted/banned written back into subfolders). Google Photos only via the Picker API (`/import`, manual pick) — optional | 1 wk |
 | M12 | **Anchors (steering)** | `/idea <text>` anchors that steer an image post; opt-in calendar prompts a week ahead (`/date` for brand dates); brand-facts stock extracted from the brand text; anchors are consumables shown in `/stock`, theme cooldown doubles per use, hard ratio ceiling in the queue; anchor-steered stock image pick via cached `visual_concept` | 1 wk |
@@ -51,7 +51,7 @@ the index. Details of what each one changed live in those plans and in git.
 | M16 | **Limits & billing** | per-brand usage caps, cost view in `/status`, manual invoicing; payment provider only when a brand asks to pay | 3–4 d |
 | — | **Carousels** | filler between any two milestones; design below | 2–3 d |
 
-Open owner steps (after M9 makes them easy): the paid learning A/B (`eval_models
+Open owner steps (M9 shipped — deploy, then `/mode learning`): the paid learning A/B (`eval_models
 --learning` vs plain on Opus 5.5 against a prod snapshot → DEV_GUIDELINES "Model
 decision") and a real-chat round-trip of ✏️ Fix and `/distill`.
 

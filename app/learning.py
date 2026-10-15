@@ -12,8 +12,9 @@ from collections import Counter
 from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.config import Settings
 from app.models import Decision, Feedback, Post, PostStatus
@@ -31,23 +32,41 @@ class Edit(BaseModel):
     lang: str
 
 
+class NearMiss(BaseModel):
+    """A 🤏 Almost'd caption and the chip the owner picked (None = skipped)."""
+
+    caption_he: str
+    reason: str | None = None
+
+
 class LearningContext(BaseModel):
     examples: list[Example] = []
     recent: list[str] = []
     reject_hints: dict[str, int] = {}
     edits: list[Edit] = []
+    near_misses: list[NearMiss] = []
+    # Set only by review.retry(): the Almost'd caption this generation is retrying.
+    retry_of: NearMiss | None = None
 
     def summary(self) -> str:
         """One line for /status and the eval header: what the model will see."""
         hints = sum(self.reject_hints.values())
         return (
             f"{len(self.examples)} examples · {len(self.edits)} edits · "
-            f"{len(self.recent)} recent · {hints} reject hints"
+            f"{len(self.recent)} recent · {hints} reject hints · "
+            f"{len(self.near_misses)} near-misses"
         )
 
     @property
     def is_empty(self) -> bool:
-        return not (self.examples or self.recent or self.reject_hints or self.edits)
+        return not (
+            self.examples
+            or self.recent
+            or self.reject_hints
+            or self.edits
+            or self.near_misses
+            or self.retry_of
+        )
 
 
 # `image` is deliberately absent: that's a selection problem, handled by ban_image in stock.
@@ -57,7 +76,7 @@ _HINTS = {
     "boring": "being boring — take a sharper angle",
 }
 _REPEATEDLY = 3
-_LIVE = (PostStatus.APPROVED, PostStatus.PUBLISHING, PostStatus.PUBLISHED)
+_LIVE = (PostStatus.APPROVED, PostStatus.KEPT, PostStatus.PUBLISHING, PostStatus.PUBLISHED)
 
 
 async def build_context(session: AsyncSession, settings: Settings) -> LearningContext:
@@ -95,8 +114,33 @@ async def build_context(session: AsyncSession, settings: Settings) -> LearningCo
         Edit(before=f.edit_before or "", after=f.edit_after or "", lang=f.edit_lang or "he")
         for f in edit_rows
     ]
+    # 🔁 Retry pairs: an Almost'd caption → its liked retry reads exactly like a ✏️ Fix.
+    parent = aliased(Post)
+    pairs = await session.execute(
+        select(parent.caption_he, Post.caption_he)
+        .join(parent, Post.retry_of == parent.id)
+        .where(Post.status.in_(_LIVE))
+        .order_by(Post.id.desc())
+        .limit(settings.learning_examples)
+    )
+    edits += [Edit(before=b, after=a, lang="he") for b, a in pairs]
+    edits = edits[: settings.learning_examples]
 
-    since = datetime.now(UTC) - timedelta(days=settings.learning_window_days)
+    since = _since(settings)
+    # Still-rejected only: an Almost later reversed to approve is an example, not a miss.
+    misses = await session.execute(
+        select(Post.caption_he, Feedback.reason)
+        .join(Post, Feedback.post_id == Post.id)
+        .where(
+            Feedback.decision == Decision.ALMOST,
+            Feedback.created_at >= since,
+            Post.status == PostStatus.REJECTED,
+        )
+        .order_by(Feedback.id.desc())
+        .limit(settings.learning_examples)
+    )
+    near_misses = [NearMiss(caption_he=c, reason=r) for c, r in misses]
+
     reasons = await session.scalars(
         select(Feedback.reason).where(
             Feedback.decision == Decision.REJECT,
@@ -114,7 +158,27 @@ async def build_context(session: AsyncSession, settings: Settings) -> LearningCo
             .limit(settings.learning_recent)
         )
     )
-    return LearningContext(examples=examples, recent=recent, reject_hints=reject_hints, edits=edits)
+    return LearningContext(
+        examples=examples,
+        recent=recent,
+        reject_hints=reject_hints,
+        edits=edits,
+        near_misses=near_misses,
+    )
+
+
+def _since(settings: Settings) -> datetime:
+    return datetime.now(UTC) - timedelta(days=settings.learning_window_days)
+
+
+async def verdict_counts(session: AsyncSession, settings: Settings) -> dict[Decision, int]:
+    """Posts per decision in the learning window (a ✏️ Fix re-approve counts once)."""
+    rows = await session.execute(
+        select(Feedback.decision, func.count(func.distinct(Feedback.post_id)))
+        .where(Feedback.created_at >= _since(settings))
+        .group_by(Feedback.decision)
+    )
+    return {Decision(d): n for d, n in rows.tuples()}
 
 
 def render(ctx: LearningContext | None) -> str:
@@ -138,6 +202,15 @@ def render(ctx: LearningContext | None) -> str:
             "The owner rewrote these captions before approving; learn what they changed."
             f"\n<owner_corrections>\n{body}\n</owner_corrections>"
         )
+    if ctx.near_misses:
+        body = "\n".join(
+            f"- {m.caption_he}" + (f"  (what was off: {m.reason})" if m.reason else "")
+            for m in ctx.near_misses
+        )
+        parts.append(
+            "The owner liked the direction of these but did not post them; learn the "
+            f"direction, fix the flaw.\n<near_misses>\n{body}\n</near_misses>"
+        )
     if ctx.reject_hints:
         lines = [
             f"- Recent rejections cited {'repeatedly ' if n >= _REPEATEDLY else ''}{_HINTS[r]}"
@@ -149,5 +222,13 @@ def render(ctx: LearningContext | None) -> str:
         parts.append(
             "These were published recently; don't repeat their themes, jokes, or openings."
             f"\n<recent_posts>\n{body}\n</recent_posts>"
+        )
+    if ctx.retry_of:
+        r = ctx.retry_of
+        off = f"\nWhat was off: {r.reason}" if r.reason else ""
+        parts.append(
+            "You already captioned this image once. The owner liked this direction; it wasn't "
+            "good enough — try again, different execution."
+            f"\n<retry_of>\n{r.caption_he}{off}\n</retry_of>"
         )
     return "\n\n".join(parts)

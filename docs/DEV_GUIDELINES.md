@@ -58,6 +58,24 @@ double-post. Only `ok` → `published`; failure → `failed` (re-queueable later
 - After editing nested async code, re-run mypy — async SQLAlchemy typing bites.
 - No secrets in code or logs. Scrub tokens from any debug output.
 
+## Bot console (M9) lessons
+
+- **Enforce learning mode at the doors.** `review.handle_decision` rewrites approve→keep and
+  `publish_next` / `publish_by_id` return early; pausing slot jobs alone doesn't stop
+  catch-up, `/postnow`, `/dev` endpoints or the scheduler-less polling CLI. Any new publish
+  path goes through those or asks `prefs.mode()`.
+- **Fail closed on settings.** Unreadable `settings` at boot ⇒ learning mode + a DM, never
+  live. `prefs.mode()` raises on DB errors; only `load_schedule` converts that.
+- **Env is the default, the DB row wins** — read schedule/mode via `app/prefs.py`, never
+  `Settings` directly at runtime.
+- **APScheduler 3:** `add_job(next_run_time=None)` adds the job *paused*; omit the kwarg
+  otherwise. Re-add slot jobs with the same ids so reschedules replace, not duplicate.
+- **Telegram:** `callback_data` ≤ 64 bytes (long refs fall back to the typed command);
+  HTML `sendMessage` that is rejected is re-sent as plain text; escape every dynamic value
+  with `html.escape`; a chat-scoped `setMyCommands` falls back to the default scope.
+- **`send_message(text, *, html, keyboard)`** — notifier fakes in tests must accept the
+  kwargs (and `.scheduler`) or console paths die with a `TypeError` that looks unrelated.
+
 ## Hebrew quality gate
 
 The LLM must produce **native-quality Hebrew** — written in Hebrew, not translated from English.

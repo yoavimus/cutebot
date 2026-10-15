@@ -13,7 +13,7 @@ import random
 from pathlib import Path
 
 from PIL import Image
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
@@ -32,7 +32,8 @@ def list_images(settings: Settings) -> list[Path]:
     return sorted(p for p in stock_dir.iterdir() if p.suffix.lower() in _EXTENSIONS)
 
 
-_COMMITTED = {PostStatus.APPROVED, PostStatus.PUBLISHING, PostStatus.PUBLISHED}
+# KEPT holds its image too: a kept post can still be promoted to approved and published.
+_COMMITTED = {PostStatus.APPROVED, PostStatus.KEPT, PostStatus.PUBLISHING, PostStatus.PUBLISHED}
 
 
 async def _pools(
@@ -40,9 +41,12 @@ async def _pools(
 ) -> tuple[list[Path], set[str], set[str]]:
     """All images on disk + the refs that are committed (used) and banned."""
     images = list_images(settings)
-    committed = set(
-        (await session.scalars(select(Post.image_ref).where(Post.status.in_(_COMMITTED)))).all()
+    held = or_(
+        Post.status.in_(_COMMITTED),
+        # a pending 🔁 retry reuses its Almost'd parent's image — not back in the pool yet
+        and_(Post.status == PostStatus.SUGGESTED, Post.retry_of.is_not(None)),
     )
+    committed = set((await session.scalars(select(Post.image_ref).where(held))).all())
     banned = set((await session.scalars(select(BannedImage.image_ref))).all())
     return images, committed, banned
 
@@ -50,9 +54,10 @@ async def _pools(
 async def select_images(session: AsyncSession, n: int, settings: Settings) -> list[Path]:
     """Pick up to ``n`` random images that are neither used by a committed post nor banned.
 
-    "Committed" = APPROVED/PUBLISHING/PUBLISHED. Rejected and suggested images are free
-    to reuse. Never recycles a used image: when the pool runs dry it returns fewer than
-    ``n`` and the caller tells the owner to upload more (see ``counts``).
+    "Committed" = APPROVED/KEPT/PUBLISHING/PUBLISHED, plus a suggested 🔁 retry. Other
+    rejected and suggested images are free to reuse. Never recycles a used image: when the
+    pool runs dry it returns fewer than ``n`` and the caller tells the owner to upload more
+    (see ``counts``).
     """
     stock_dir = Path(settings.stock_images_dir)
     images, committed, banned = await _pools(session, settings)

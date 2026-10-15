@@ -83,9 +83,38 @@ async def test_banned_image_never_selected(session: AsyncSession, tmp_path: Path
 
     assert await stock.select_images(session, 5, settings) == [tmp_path / "b.jpg"]
     assert await stock.counts(session, settings) == {
-        "unused": 1, "used": 0, "banned": 1, "total": 2
+        "unused": 1,
+        "used": 0,
+        "banned": 1,
+        "total": 2,
     }
 
     assert await stock.unban_image(session, "a.jpg") is True
     assert await stock.unban_image(session, "a.jpg") is False
     assert len(await stock.select_images(session, 5, settings)) == 2
+
+
+async def test_pending_retry_and_kept_hold_their_image(
+    session: AsyncSession, tmp_path: Path
+) -> None:
+    for name in ("a.jpg", "b.jpg", "c.jpg"):
+        (tmp_path / name).write_bytes(b"\xff\xd8\xff")
+    settings = Settings(stock_images_dir=str(tmp_path))
+
+    def post(ref: str, status: PostStatus, retry_of: int | None = None) -> Post:
+        return Post(
+            image_ref=ref,
+            caption_he="x",
+            caption_en="x",
+            visual_concept="x",
+            status=status,
+            retry_of=retry_of,
+        )
+
+    almost = post("a.jpg", PostStatus.REJECTED)
+    session.add_all([almost, post("b.jpg", PostStatus.KEPT)])
+    await session.commit()
+    session.add(post("a.jpg", PostStatus.SUGGESTED, retry_of=almost.id))
+    await session.commit()
+    refs = {str(p.relative_to(tmp_path)) for p in await stock.select_images(session, 3, settings)}
+    assert refs == {"c.jpg"}

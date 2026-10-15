@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
-from app.learning import LearningContext, build_context, render
+from app.learning import LearningContext, NearMiss, build_context, render, verdict_counts
 from app.llm import _user_prompt
 from app.models import Decision, Feedback, Post, PostStatus
 
@@ -98,3 +98,42 @@ async def test_disabled_gives_empty_context(session: AsyncSession) -> None:
 def test_blocks_appear_only_when_populated() -> None:
     assert "<recent_posts>" not in render(LearningContext(reject_hints={"boring": 1}))
     assert "<approved_examples>" not in render(LearningContext(recent=["x"]))
+
+
+async def test_kept_is_an_example_near_misses_and_retry_pairs(session: AsyncSession) -> None:
+    session.add(_post(1, PostStatus.KEPT))
+    session.add_all([_post(2, PostStatus.REJECTED), _post(3, PostStatus.REJECTED)])
+    retried = _post(4, PostStatus.APPROVED)
+    retried.retry_of = 2
+    pending = _post(5, PostStatus.SUGGESTED)  # a retry not yet liked → no pair
+    pending.retry_of = 3
+    session.add_all([retried, pending])
+    old = datetime.now(UTC) - timedelta(days=60)
+    session.add_all(
+        [
+            Feedback(post_id=1, decision=Decision.APPROVE),
+            Feedback(post_id=2, decision=Decision.ALMOST, reason="hebrew"),
+            Feedback(post_id=3, decision=Decision.ALMOST),
+            Feedback(post_id=3, decision=Decision.ALMOST, created_at=old),  # out of window
+            Feedback(post_id=4, decision=Decision.APPROVE),
+        ]
+    )
+    await session.commit()
+    ctx = await build_context(session, _S)
+    assert {e.caption_he for e in ctx.examples} == {"he1", "he4"}
+    assert ctx.near_misses == [
+        NearMiss(caption_he="he3"),
+        NearMiss(caption_he="he2", reason="hebrew"),
+    ]
+    assert [(e.before, e.after) for e in ctx.edits] == [("he2", "he4")]
+    assert ctx.summary().endswith("· 2 near-misses")
+    out = render(ctx)
+    assert "<near_misses>\n- he3\n- he2  (what was off: hebrew)\n</near_misses>" in out
+    assert "before: he2\n  after: he4" in out
+    assert await verdict_counts(session, _S) == {Decision.APPROVE: 2, Decision.ALMOST: 2}
+
+
+def test_retry_of_block() -> None:
+    out = render(LearningContext(retry_of=NearMiss(caption_he="prev", reason="boring")))
+    assert "<retry_of>\nprev\nWhat was off: boring\n</retry_of>" in out
+    assert "different execution" in out

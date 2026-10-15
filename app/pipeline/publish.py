@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import prefs
 from app.config import Settings
 from app.models import Post, PostStatus
 from app.notifier.base import Notifier
@@ -118,6 +119,9 @@ async def publish_next(
     publishers: list[Publisher] | None = None,
 ) -> Post | None:
     """Publish the next approved post to all networks. Returns the post, or None if empty."""
+    if await prefs.mode(session) == prefs.LEARNING:
+        logger.info("Learning mode — nothing publishes.")
+        return None
     post = await queue.peek_next(session)
     if post is None:
         logger.info("Posting slot fired but the queue is empty — nothing to publish.")
@@ -139,7 +143,7 @@ async def catch_up_missed_slot(
     recent slot fired within ``CATCHUP_WINDOW_MIN`` and nothing was published since,
     drain one post now. ponytail: startup check, not a persistent jobstore.
     """
-    slots = settings.posting_slots_list
+    slots = await prefs.posting_slots(session, settings)
     if not slots:
         return None
     tz = ZoneInfo(settings.schedule_tz)
@@ -173,5 +177,8 @@ async def publish_by_id(
     """Publish a specific approved post by ID. Returns post unchanged (not None) if not APPROVED."""
     post = await session.get(Post, post_id)
     if post is None or post.status != PostStatus.APPROVED:
+        return post
+    if await prefs.mode(session) == prefs.LEARNING:
+        logger.info("Learning mode — post %s not published.", post_id)
         return post
     return await _do_publish(session, post, publishers)

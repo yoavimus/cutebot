@@ -9,9 +9,10 @@ slots — learning from every decision. **`docs/PRODUCT_SPEC.md` is the source o
 for scope, architecture, and roadmap.
 
 Shipped: the four-stage cycle in prod (Railway), Telegram operator console, Instagram
-publisher, learning loop v1 (M0–M8). Next (2026-10-14 order): bot console v2 → tenant
-seam → media v2 → anchors → beta onboarding → IG DM assistant → analytics → limits;
-carousels as filler — `docs/ROADMAP.md`. Instagram-only until a brand asks otherwise.
+publisher, learning loop v1, bot console v2 (Keep/Almost/Retry verdicts, `/mode`,
+`/schedule`, slash menu + HTML) — M0–M9. Next (2026-10-14 order): tenant seam → media v2
+→ anchors → beta onboarding → IG DM assistant → analytics → limits; carousels as filler —
+`docs/ROADMAP.md`. Instagram-only until a brand asks otherwise.
 
 ## Docs layout
 

@@ -20,6 +20,12 @@ class Notifier(Protocol):
         """Deliver one suggestion with Approve/Reject controls."""
         ...
 
-    async def send_message(self, text: str) -> None:
-        """Send a plain text message to the owner (status updates, alerts)."""
+    async def send_message(
+        self,
+        text: str,
+        *,
+        html: bool = False,
+        keyboard: list[list[dict[str, str]]] | None = None,
+    ) -> None:
+        """Send a message to the owner (status updates, alerts); optional HTML + inline buttons."""
         ...
