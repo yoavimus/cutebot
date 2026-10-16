@@ -92,7 +92,8 @@ Pipeline
 Library
 /stock [unban <file>]   unused / used / banned counts; first 10 banned rows have ♻️ Unban buttons
 Settings
-/schedule               current generation cron + slots (SCHEDULE_TZ) with next-run times
+/schedule               generation cron + slots (SCHEDULE_TZ) with next-run times, plus edit buttons:
+                        ✖ per slot, ＋ Add slot / ⏰ Generate (hour grid 07–22), ↺ Reset — whole hours only
 /schedule post 12:00,18:00      1–6 HH:MM slots, applied without a restart
 /schedule generate 09:00        daily at, or a raw cron: "0 9 * * 1-5"
 /schedule reset                 back to the env defaults
@@ -127,6 +128,7 @@ message, so Telegram's 4096-char limit applies; `/stock` and `/queue` already ca
 | `fix:<id>` | ForceReply prompt for the corrected caption |
 | `postnow:<id>` / `drop:<id>` | `/queue` row buttons → `publish_by_id` / reject (owner-gated) |
 | `unban:<ref>` | `/stock` row button; refs over Telegram's 64-byte callback cap show the typed command instead |
+| `sch:view` · `sch:pick:add\|gen` · `sch:add:<H>` · `sch:del:<HHMM>` · `sch:gen:<H>` · `sch:reset` | `/schedule` edit buttons; each replays through `_cmd_schedule` (owner-gated) |
 | `mode:learning` / `mode:live` | `/mode` confirm keyboard (owner-gated; `mode:cancel` still toasts for old cards) |
 | `distill:apply\|discard:<token>` | `/distill` proposal (owner-gated) |
 

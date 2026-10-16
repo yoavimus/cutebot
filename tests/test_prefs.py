@@ -197,6 +197,36 @@ async def test_apply_slots_replaces_job_ids() -> None:
     assert set(_posting_jobs(s)) == {"posting-1000", "posting-1800"}
 
 
+def _tap(data: str) -> dict:
+    return {"id": "q", "data": data, "message": {"message_id": 1, "chat": {"id": _OWNER}}}
+
+
+async def test_schedule_buttons_edit_slots(session: AsyncSession) -> None:
+    from app.notifier.telegram import process_callback
+
+    n = _Notifier()
+    await _cmd(session, n, "/schedule")
+    rows = n.keyboards[-1]
+    assert [b["callback_data"] for b in rows[0]] == ["sch:del:1200", "sch:del:1800"]
+    assert rows[1][0]["callback_data"] == "sch:pick:add" and "09:00" in rows[1][1]["text"]
+
+    await process_callback(session, n, _tap("sch:pick:add"), _SETTINGS)
+    assert n.keyboards[-1][0][0]["callback_data"] == "sch:add:7"
+    await process_callback(session, n, _tap("sch:add:14"), _SETTINGS)
+    assert await prefs.get(session, prefs.POSTING_SLOTS) == "12:00,14:00,18:00"
+    await process_callback(session, n, _tap("sch:del:1200"), _SETTINGS)
+    await process_callback(session, n, _tap("sch:del:1800"), _SETTINGS)
+    assert await prefs.get(session, prefs.POSTING_SLOTS) == "14:00"
+    await process_callback(session, n, _tap("sch:del:1400"), _SETTINGS)
+    assert n.toasts[-1] == "Keep at least one slot"
+    assert await prefs.get(session, prefs.POSTING_SLOTS) == "14:00"
+    await process_callback(session, n, _tap("sch:gen:7"), _SETTINGS)
+    assert await prefs.get(session, prefs.GENERATION_CRON) == "0 7 * * *"
+    await process_callback(session, n, _tap("sch:reset"), _SETTINGS)
+    assert await prefs.get(session, prefs.POSTING_SLOTS) is None
+    assert "post: 12:00,18:00" in n.messages[-1]
+
+
 async def test_schedule_post_generate_reset(session: AsyncSession) -> None:
     s = sched.build_scheduler(
         async_sessionmaker(),
