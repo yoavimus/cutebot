@@ -80,6 +80,9 @@ the grouped `/help`. Output is HTML; values are escaped.
 
 ```
 Pipeline
+/console                pin a status card with a button grid; every tap runs a command and
+                        rewrites the card in place (Status · Queue · Pending / Generate · Stock ·
+                        Schedule / Mode · Help — publish from a /queue ▶ row, not the grid)
 /status                 mode header, counts by status, queue depth, stock, learning verdicts, last 5 published
 /queue                  approved posts in order — each row has ▶ Post now / ❌ Drop buttons
 /pending                re-DM undecided suggestions (count line first)
@@ -103,6 +106,12 @@ Settings
 (`scope: {type: chat, chat_id}`); if Telegram rejects the scoped call it falls back to the
 default scope so the menu never disappears. Labels are one or two plain words (≤ 16 chars); `/requeue`
 is not in the menu. After changing labels, restart so the app re-registers them.
+
+**Console card** — `_CONSOLE_GRID` + `_CardWriter` in `app/notifier/telegram.py`: a tap on
+the pinned card runs the same handler as the typed command with a notifier whose
+`send_message` edits the card (`editMessageText`) and keeps the grid under the output. Taps
+on an ordinary DM (a `/queue` list) reply with a new message as before. The card is one
+message, so Telegram's 4096-char limit applies; `/stock` and `/queue` already cap their rows.
 
 **Card keyboard** (M9.1): `✅ Approve · 📚 Keep · ✏️ Fix` / `🤏 Almost · ❌ Reject`.
 
