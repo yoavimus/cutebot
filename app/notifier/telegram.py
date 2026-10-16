@@ -671,9 +671,34 @@ def _fmt_next(when: Any) -> str:
     return when.strftime("%a %d %b %H:%M") if when is not None else "paused"
 
 
+_PICK_HOURS = range(7, 23)  # the hour grid: 07…22, four per row
+_SIMPLE_CRON = re.compile(r"^0 (\d{1,2}) \* \* \*$")
+
+
+def _schedule_keyboard(slots: list[tuple[int, int]], cron: str) -> list[list[dict[str, str]]]:
+    """Tap-to-edit: ✖ per slot, + Add slot, generation hour, reset.
+    ponytail: buttons work in whole hours; minutes still go through the typed command."""
+    rows = [
+        [_btn(f"✖ {h:02d}:{m:02d}", f"sch:del:{h:02d}{m:02d}") for h, m in slots[i : i + 3]]
+        for i in range(0, len(slots), 3)
+    ]
+    m = _SIMPLE_CRON.match(cron)
+    gen = f"⏰ Generate {int(m[1]):02d}:00" if m else "⏰ Generate at…"
+    rows.append([_btn("＋ Add slot", "sch:pick:add"), _btn(gen, "sch:pick:gen")])
+    rows.append([_btn("↺ Reset to defaults", "sch:reset")])
+    return rows
+
+
+def _hour_grid(what: str) -> list[list[dict[str, str]]]:
+    hours = [_btn(f"{h:02d}:00", f"sch:{what}:{h}") for h in _PICK_HOURS]
+    rows = [hours[i : i + 4] for i in range(0, len(hours), 4)]
+    rows.append([_btn("‹ Schedule", "sch:view")])
+    return rows
+
+
 async def _schedule_view(
     session: AsyncSession, notifier: TelegramNotifier, settings: Settings
-) -> str:
+) -> tuple[str, list[list[dict[str, str]]]]:
     cron = await prefs.generation_cron(session, settings)
     slots = await prefs.posting_slots(session, settings)
     lines = [f"Schedule ({settings.schedule_tz})", f"generate: {cron}"]
@@ -687,7 +712,7 @@ async def _schedule_view(
             lines.append(f"  {hh:02d}:{mm:02d} next: {_fmt_next(runs[job_id])}")
     if await prefs.mode(session) == prefs.LEARNING:
         lines.append("🎓 learning mode — slots are paused")
-    return "\n".join(lines)
+    return "\n".join(lines), _schedule_keyboard(slots, cron)
 
 
 async def _cmd_schedule(
@@ -700,7 +725,8 @@ async def _cmd_schedule(
     paused = await prefs.mode(session) == prefs.LEARNING
 
     if sub == "":
-        await notifier.send_message(await _schedule_view(session, notifier, settings))
+        text, keyboard = await _schedule_view(session, notifier, settings)
+        await notifier.send_message(text, keyboard=keyboard)
         return
     if sub == "post":
         try:
@@ -729,7 +755,43 @@ async def _cmd_schedule(
     else:
         await notifier.send_message(_SCHEDULE_USAGE)
         return
-    await notifier.send_message(await _schedule_view(session, notifier, settings))
+    text, keyboard = await _schedule_view(session, notifier, settings)
+    await notifier.send_message(text, keyboard=keyboard)
+
+
+async def _schedule_callback(
+    session: AsyncSession, notifier: TelegramNotifier, cb: dict, arg: str, settings: Settings
+) -> None:
+    """``sch:view`` / ``sch:pick:add|gen`` / ``sch:add:H`` / ``sch:del:HHMM`` / ``sch:gen:H`` /
+    ``sch:reset`` — every edit is replayed through ``_cmd_schedule`` so one path applies it."""
+    what, _, val = arg.partition(":")
+    slots = await prefs.posting_slots(session, settings)
+    args, toast = "", ""
+    if what == "pick" and val in ("add", "gen"):
+        title = "Add a posting slot:" if val == "add" else "Generate daily at:"
+        await notifier.send_message(title, keyboard=_hour_grid(val))
+        return
+    if what == "add" and val.isdigit():
+        new = sorted(set(slots) | {(int(val), 0)})
+        if len(new) > prefs.MAX_SLOTS:
+            await notifier.answer_callback(cb["id"], f"Max {prefs.MAX_SLOTS} slots")
+            return
+        args, toast = f"post {prefs.format_slots(new)}", f"Added {int(val):02d}:00"
+    elif what == "del" and len(val) == 4 and val.isdigit():
+        gone = (int(val[:2]), int(val[2:]))
+        keep = [x for x in slots if x != gone]
+        if not keep:
+            await notifier.answer_callback(cb["id"], "Keep at least one slot")
+            return
+        args, toast = f"post {prefs.format_slots(keep)}", f"Removed {val[:2]}:{val[2:]}"
+    elif what == "gen" and val.isdigit():
+        args, toast = f"generate {int(val):02d}:00", f"Generating daily at {int(val):02d}:00"
+    elif what == "reset":
+        args, toast = "reset", "Back to env defaults"
+    elif what != "view":
+        return
+    await notifier.answer_callback(cb["id"], toast)
+    await _cmd_schedule(session, notifier, args, settings)
 
 
 async def _cmd_queue(
@@ -952,7 +1014,7 @@ async def process_callback(
         return
 
     # ── console buttons (/queue, /stock, /mode): state-changing, so owner-gated ──
-    if data.startswith(("con:", "postnow:", "drop:", "unban:", "mode:")):
+    if data.startswith(("con:", "sch:", "postnow:", "drop:", "unban:", "mode:")):
         await _console_callback(session, notifier, cb, settings or get_settings())
         return
 
@@ -1103,7 +1165,9 @@ async def _console_callback(
         return
     action, _, arg = cb.get("data", "").partition(":")
     notifier = _card_or_chat(notifier, cb)
-    if action == "con":
+    if action == "sch":
+        await _schedule_callback(session, notifier, cb, arg, settings)
+    elif action == "con":
         handler = _HANDLERS.get(f"/{arg}") if arg != "console" else None
         if handler is not None:
             await notifier.answer_callback(cb["id"], "")
