@@ -96,7 +96,10 @@ _HELP_CARD = (
     "off, then 🔁 Retry the same photo · ❌ Reject — pick a reason; 🚫 Ban image retires the photo"
 )
 _CALLBACK_DATA_MAX = 64  # bytes, Telegram's cap
+# Output caps: a console tap must never flood the chat or blow Telegram's 4096-char message.
 _PENDING_RESEND = 5  # /pending re-DMs only the newest cards; older ones stay open
+_LIST_ROWS = 10  # /queue and /stock show this many rows, then "+N more"
+_GENERATE_MAX = 10  # /generate n is clamped — each post is a paid vision call and a card
 # The pinned console card: one tap = one command, output replaces the card text.
 # /postnow is deliberately absent — publish from the ▶ button on a /queue row.
 _CONSOLE_GRID = [
@@ -548,13 +551,16 @@ async def _cmd_stock(
     e = html_lib.escape
     lines = [e(stock.summary_line(c))]
     keyboard: list[list[dict[str, str]]] = []
-    for ref in banned:
+    for ref in banned[:_LIST_ROWS]:
         data = f"unban:{ref}"
         if len(data.encode()) <= _CALLBACK_DATA_MAX:
             lines.append(f"🚫 <code>{e(ref)}</code>")
             keyboard.append([_btn(f"♻️ Unban {ref}", data)])
         else:  # too long for callback data — the typed command still works
             lines.append(f"🚫 <code>{e(ref)}</code> — /stock unban {e(ref)}")
+    if len(banned) > _LIST_ROWS:
+        more = len(banned) - _LIST_ROWS
+        lines.append(f"… +{more} more banned — /stock unban &lt;file&gt; works for any of them")
     await notifier.send_message("\n".join(lines), html=True, keyboard=keyboard or None)
 
 
@@ -565,6 +571,10 @@ async def _cmd_generate(
     from app.pipeline import review as _rev
 
     n = int(args) if args.isdigit() else settings.batch_size
+    if n > _GENERATE_MAX:
+        await notifier.send_message(f"Capped at {_GENERATE_MAX} per /generate.")
+        n = _GENERATE_MAX
+    n = max(n, 1)
     posts = await generate.generate_batch(session, n=n)
     await _rev.send_for_review(posts, notifier)
     await notifier.send_message(f"Generated {len(posts)} post(s) — check your review DMs.")
@@ -733,12 +743,14 @@ async def _cmd_queue(
     e = html_lib.escape
     lines = [f"<b>Queue</b> ({len(posts)} post(s))"]
     keyboard = []
-    for p in posts:
+    for p in posts[:_LIST_ROWS]:
         preview = (p.caption_he[:60] + "…") if len(p.caption_he) > 60 else p.caption_he
         lines.append(f"#{p.id} · pos {p.queue_position} · {e(preview)}")
         keyboard.append(
             [_btn(f"▶ Post now #{p.id}", f"postnow:{p.id}"), _btn("❌ Drop", f"drop:{p.id}")]
         )
+    if len(posts) > _LIST_ROWS:
+        lines.append(f"… +{len(posts) - _LIST_ROWS} more, in order")
     await notifier.send_message("\n".join(lines), html=True, keyboard=keyboard)
 
 

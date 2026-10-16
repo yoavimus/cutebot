@@ -84,13 +84,13 @@ Pipeline
                         rewrites the card in place (Status · Queue · Pending / Generate · Stock ·
                         Schedule / Mode · Help — publish from a /queue ▶ row, not the grid)
 /status                 mode header, counts by status, queue depth, stock, learning verdicts, last 5 published
-/queue                  approved posts in order — each row has ▶ Post now / ❌ Drop buttons
+/queue                  approved posts in order, first 10 rows (+N more) — ▶ Post now / ❌ Drop per row
 /pending                re-DM the newest 5 undecided suggestions (count line first; older stay open)
-/generate [n]           generate n suggestions now (default BATCH_SIZE) + DM for review
+/generate [n]           generate n suggestions now (default BATCH_SIZE, capped at 10) + DM for review
 /postnow [id]           publish front-of-queue, or a specific APPROVED post (refused in learning mode / on kept)
 /requeue <id>           move a FAILED post back into the queue (typed only — not in the menu)
 Library
-/stock [unban <file>]   unused / used / banned counts; banned rows have ♻️ Unban buttons
+/stock [unban <file>]   unused / used / banned counts; first 10 banned rows have ♻️ Unban buttons
 Settings
 /schedule               current generation cron + slots (SCHEDULE_TZ) with next-run times
 /schedule post 12:00,18:00      1–6 HH:MM slots, applied without a restart
