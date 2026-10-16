@@ -310,7 +310,7 @@ def test_command_table_menu_labels() -> None:
     from app.notifier.telegram import _COMMANDS, _HANDLERS
 
     labelled = [(c, label) for _, c, label, _ in _COMMANDS if label]
-    assert all(len(label) <= 32 for _, label in labelled)
+    assert all(len(label) <= 16 for _, label in labelled)
     assert all(re.fullmatch(r"[A-Za-z0-9 ,./+-]+", label) for _, label in labelled)  # no emoji
     assert "requeue" not in [c for c, _ in labelled]
     assert {f"/{c}" for _, c, _, _ in _COMMANDS} <= set(_HANDLERS)
@@ -356,7 +356,7 @@ async def test_set_my_commands_owner_scope(fake_http: type[_FakeHttp]) -> None:
     assert method == "setMyCommands"
     assert body["scope"] == {"type": "chat", "chat_id": str(_OWNER_ID)}
     cmds = [c["command"] for c in body["commands"]]
-    assert cmds[0] == "status" and cmds[-1] == "help" and "requeue" not in cmds
+    assert cmds[:2] == ["console", "status"] and cmds[-1] == "help" and "requeue" not in cmds
     assert all(len(c["description"]) <= 32 for c in body["commands"])
 
 
@@ -526,6 +526,37 @@ async def test_console_callbacks_ignore_non_owner(session: AsyncSession) -> None
     cb = {"id": "c", "data": "mode:learning", "message": {"message_id": 1, "chat": {"id": 999}}}
     await process_callback(session, n, cb, _OWNER_SETTINGS)
     assert await prefs.mode(session) == prefs.LIVE and n.toasts == []
+
+
+async def test_console_card_sends_pins_and_edits_in_place(
+    session: AsyncSession, fake_http: type[_FakeHttp]
+) -> None:
+    from app.notifier.telegram import TelegramNotifier, process_callback, process_message
+
+    n = TelegramNotifier(_OWNER_SETTINGS)
+    fake_http.replies = [{"ok": True, "result": {"message_id": 77}}]
+    msg = {"chat": {"id": _OWNER_ID}, "text": "/console"}
+    await process_message(session, n, msg, _OWNER_SETTINGS)
+    (m1, b1), (m2, b2) = fake_http.calls
+    grid = b1["reply_markup"]["inline_keyboard"]
+    assert m1 == "sendMessage" and grid[0][0]["callback_data"] == "con:status"
+    assert m2 == "pinChatMessage" and b2["message_id"] == 77 and b2["disable_notification"]
+
+    fake_http.calls.clear()
+    card = {"message_id": 77, "chat": {"id": _OWNER_ID}, "reply_markup": b1["reply_markup"]}
+    tap = {"id": "c", "data": "con:help", "message": card}
+    await process_callback(session, n, tap, _OWNER_SETTINGS)
+    assert [m for m, _ in fake_http.calls] == ["answerCallbackQuery", "editMessageText"]
+    body = fake_http.calls[1][1]
+    assert body["message_id"] == 77 and "/status" in body["text"]
+    assert body["reply_markup"]["inline_keyboard"][-len(grid) :] == grid
+
+    # a tap on a plain /queue DM (no grid) still replies with a new message
+    fake_http.calls.clear()
+    plain = {"message_id": 5, "chat": {"id": _OWNER_ID}}
+    tap = {"id": "c", "data": "con:help", "message": plain}
+    await process_callback(session, n, tap, _OWNER_SETTINGS)
+    assert [m for m, _ in fake_http.calls] == ["answerCallbackQuery", "sendMessage"]
 
 
 # ─────────────────────────────── /requeue command ────────────────────────────

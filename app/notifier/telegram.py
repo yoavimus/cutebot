@@ -70,27 +70,24 @@ _EDIT_REF = re.compile(r"post #(\d+) · card (\d+)")
 
 # One table drives Telegram's "/" menu (setMyCommands) and the grouped /help.
 # (group, command, menu_label, usage). Row order = menu order (frequency, settings last).
-# menu_label: plain text, no emoji, verb-first, ≤ 32 chars so phones don't truncate;
+# menu_label: one or two plain words, no emoji, ≤ 16 chars — Telegram lists it beside
+# the command, so a sentence there is noise;
 # "" keeps a command out of the menu (still typed, still in /help). usage = args + detail,
 # shown by /help only.
-_MENU_LABEL_MAX = 32
+_MENU_LABEL_MAX = 16
 _COMMANDS: list[tuple[str, str, str, str]] = [
-    ("Pipeline", "status", "Pipeline, queue and stock counts", "— counts, mode, verdicts"),
-    ("Pipeline", "queue", "Approved posts, in order", "— approved posts; ▶ / ❌ per row"),
-    ("Pipeline", "pending", "Resend cards awaiting review", "— resend every open card"),
-    ("Pipeline", "generate", "Draft a batch now", "[n] — draft n posts now"),
-    ("Pipeline", "postnow", "Publish the next queued post", "[id] — publish next, or post #id"),
+    ("Pipeline", "console", "Console", "— pin a status card with buttons for everything below"),
+    ("Pipeline", "status", "Status", "— counts, mode, verdicts"),
+    ("Pipeline", "queue", "Queue", "— approved posts; ▶ / ❌ per row"),
+    ("Pipeline", "pending", "Pending cards", "— resend every open card"),
+    ("Pipeline", "generate", "Generate", "[n] — draft n posts now"),
+    ("Pipeline", "postnow", "Post now", "[id] — publish next, or post #id"),
     ("Pipeline", "requeue", "", "<id> — put a failed post back in the queue"),
-    ("Library", "stock", "Stock library", "[unban <file>] — counts, banned list"),
-    (
-        "Settings",
-        "schedule",
-        "View or change the slots",
-        "[post 12:00,18:00 | generate 09:00 | reset]",
-    ),
-    ("Settings", "mode", "Learning / live", "[learning|live] — learning: ✅ = Keep, nothing posts"),
-    ("Settings", "distill", "Propose a brand.md revision", "— from recent feedback"),
-    ("Settings", "help", "All commands + arguments", ""),
+    ("Library", "stock", "Stock", "[unban <file>] — counts, banned list"),
+    ("Settings", "schedule", "Schedule", "[post 12:00,18:00 | generate 09:00 | reset]"),
+    ("Settings", "mode", "Mode", "[learning|live] — learning: ✅ = Keep, nothing posts"),
+    ("Settings", "distill", "Distill", "— from recent feedback"),
+    ("Settings", "help", "Help", ""),
 ]
 _HELP_CARD = (
     "✅ Approve — publish · 📚 Keep — good, learning only, never posts · ✏️ Fix — reply with the "
@@ -98,6 +95,13 @@ _HELP_CARD = (
     "off, then 🔁 Retry the same photo · ❌ Reject — pick a reason; 🚫 Ban image retires the photo"
 )
 _CALLBACK_DATA_MAX = 64  # bytes, Telegram's cap
+# The pinned console card: one tap = one command, output replaces the card text.
+# /postnow is deliberately absent — publish from the ▶ button on a /queue row.
+_CONSOLE_GRID = [
+    ["Status", "Queue", "Pending"],
+    ["Generate", "Stock", "Schedule"],
+    ["Mode", "Help"],
+]
 
 
 class TelegramNotifier:
@@ -189,6 +193,24 @@ class TelegramNotifier:
             logger.warning("HTML sendMessage rejected: %s", resp.json().get("description"))
             plain = html_lib.unescape(re.sub(r"<[^>]+>", "", text))
             await self.send_message(plain, keyboard=keyboard)
+
+    async def send_console(self, text: str) -> None:
+        """Send the console card (HTML + button grid) and pin it, silently."""
+        chat = self._settings.telegram_chat_id
+        body = {
+            "chat_id": chat,
+            "text": text,
+            "parse_mode": "HTML",
+            "reply_markup": {"inline_keyboard": _console_rows()},
+        }
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(self._url("sendMessage"), json=body)
+            mid = (resp.json().get("result") or {}).get("message_id")
+            if mid:
+                await client.post(
+                    self._url("pinChatMessage"),
+                    json={"chat_id": chat, "message_id": mid, "disable_notification": True},
+                )
 
     async def set_my_commands(self) -> None:
         """Register the "/" menu for the owner's chat; fall back to the default scope."""
@@ -377,6 +399,54 @@ def _btn(text: str, data: str) -> dict[str, str]:
     return {"text": text, "callback_data": data}
 
 
+def _console_rows() -> list[list[dict[str, str]]]:
+    return [[_btn(label, f"con:{label.lower()}") for label in row] for row in _CONSOLE_GRID]
+
+
+class _CardWriter(TelegramNotifier):
+    """A notifier whose ``send_message`` edits the console card instead of sending.
+
+    Handlers stay untouched: a tap on the card runs the same handler as the typed
+    command, and its output (plus any buttons it adds) replaces the card body, with
+    the grid kept underneath. Everything else (cards, toasts) still goes out normally.
+    """
+
+    def __init__(self, base: TelegramNotifier, message_id: int) -> None:
+        super().__init__(base._settings)
+        self.scheduler = base.scheduler
+        self._message_id = message_id
+
+    async def send_message(
+        self,
+        text: str,
+        *,
+        html: bool = False,
+        keyboard: list[list[dict[str, str]]] | None = None,
+    ) -> None:
+        body: dict[str, Any] = {
+            "chat_id": self._settings.telegram_chat_id,
+            "message_id": self._message_id,
+            "text": text,
+            "reply_markup": {"inline_keyboard": (keyboard or []) + _console_rows()},
+        }
+        if html:
+            body["parse_mode"] = "HTML"
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(self._url("editMessageText"), json=body)
+        if html and not resp.json().get("ok"):
+            logger.warning("HTML editMessageText rejected: %s", resp.json().get("description"))
+            plain = html_lib.unescape(re.sub(r"<[^>]+>", "", text))
+            await self.send_message(plain, keyboard=keyboard)
+
+
+def _card_or_chat(notifier: TelegramNotifier, cb: dict) -> TelegramNotifier:
+    """Taps on the console card edit the card; taps elsewhere (a /queue DM) reply as usual."""
+    markup = json.dumps(cb["message"].get("reply_markup") or {})
+    if '"con:' not in markup:
+        return notifier
+    return _CardWriter(notifier, cb["message"]["message_id"])
+
+
 _DISTILL_DIFF_LIMIT = 3000  # keeps rationale + diff inside Telegram's 4096-char message cap
 _EDITABLE = (PostStatus.SUGGESTED, PostStatus.APPROVED)
 _TERMINAL_CB = {PostStatus.PUBLISHING, PostStatus.PUBLISHED, PostStatus.FAILED}
@@ -436,6 +506,12 @@ async def _cmd_status(
     session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
 ) -> None:
     await notifier.send_message(await _build_status_summary(session, settings), html=True)
+
+
+async def _cmd_console(
+    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+) -> None:
+    await notifier.send_console(await _build_status_summary(session, settings))
 
 
 async def _cmd_help(
@@ -712,6 +788,7 @@ async def _cmd_distill(
 
 
 _HANDLERS: dict[str, Any] = {
+    "/console": _cmd_console,
     "/status": _cmd_status,
     "/generate": _cmd_generate,
     "/postnow": _cmd_postnow,
@@ -845,7 +922,7 @@ async def process_callback(
         return
 
     # ── console buttons (/queue, /stock, /mode): state-changing, so owner-gated ──
-    if data.startswith(("postnow:", "drop:", "unban:", "mode:")):
+    if data.startswith(("con:", "postnow:", "drop:", "unban:", "mode:")):
         await _console_callback(session, notifier, cb, settings or get_settings())
         return
 
@@ -990,12 +1067,18 @@ async def process_callback(
 async def _console_callback(
     session: AsyncSession, notifier: TelegramNotifier, cb: dict, settings: Settings
 ) -> None:
-    """``postnow:<id>`` / ``drop:<id>`` / ``unban:<ref>`` / ``mode:<learning|live|cancel>``."""
+    """``con:<cmd>`` / ``postnow:<id>`` / ``drop:<id>`` / ``unban:<ref>`` / ``mode:<…>``."""
     if str(cb["message"]["chat"]["id"]) != str(settings.telegram_chat_id):
         logger.warning("Ignoring console callback from non-owner chat.")
         return
     action, _, arg = cb.get("data", "").partition(":")
-    if action == "postnow" and arg.isdigit():
+    notifier = _card_or_chat(notifier, cb)
+    if action == "con":
+        handler = _HANDLERS.get(f"/{arg}") if arg != "console" else None
+        if handler is not None:
+            await notifier.answer_callback(cb["id"], "")
+            await handler(session, notifier, "", settings)
+    elif action == "postnow" and arg.isdigit():
         await notifier.answer_callback(cb["id"], f"▶ Publishing #{arg}…")
         await _cmd_postnow(session, notifier, arg, settings)
     elif action == "drop" and arg.isdigit():
