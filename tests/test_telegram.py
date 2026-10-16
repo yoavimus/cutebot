@@ -599,6 +599,14 @@ async def test_cmd_pending_resends(session: AsyncSession) -> None:
     assert len(notifier.suggestions) == len(posts)
 
 
+async def test_cmd_pending_resends_only_latest_five(session: AsyncSession) -> None:
+    posts = await generate.generate_batch(session, n=7, brand="b")
+    notifier = _FakeNotifier()
+    await process_message(session, notifier, _msg(_OWNER_ID, "/pending"), _OWNER_SETTINGS)
+    assert "7 pending" in notifier.messages[0] and "latest 5" in notifier.messages[0]
+    assert [p.id for p in notifier.suggestions] == [p.id for p in posts[-5:]]
+
+
 # ── ✏️ Fix (M8.2) ────────────────────────────────────────────────────────────
 
 
