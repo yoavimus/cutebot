@@ -153,11 +153,7 @@ async def test_mode_command_pauses_and_resumes_slot_jobs(session: AsyncSession) 
         n = _Notifier(s)
         await _cmd(session, n, "/mode")
         assert "Mode: <b>live</b>" in n.messages[-1]
-        assert [b["callback_data"] for b in n.keyboards[-1][0]] == [
-            "mode:learning",
-            "mode:live",
-            "mode:cancel",
-        ]
+        assert [b["callback_data"] for b in n.keyboards[-1][0]] == ["mode:learning", "mode:live"]
         await _cmd(session, n, "/mode learning")
         assert await prefs.mode(session) == "learning"
         assert all(j.next_run_time is None for j in _posting_jobs(s).values())
