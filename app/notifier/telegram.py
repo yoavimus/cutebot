@@ -72,21 +72,22 @@ _EDIT_REF = re.compile(r"post #(\d+) · card (\d+)")
 # (group, command, menu_label, usage). Row order = menu order (frequency, settings last).
 # menu_label: one or two plain words, no emoji, ≤ 16 chars — Telegram lists it beside
 # the command, so a sentence there is noise;
-# "" keeps a command out of the menu (still typed, still in /help). usage = args + detail,
-# shown by /help only.
+# "" keeps a command out of the menu (still typed, still in /help, most on the /console
+# card). The menu only has to reach the card and the commands that take arguments.
+# usage = args + detail, shown by /help only.
 _MENU_LABEL_MAX = 16
 _COMMANDS: list[tuple[str, str, str, str]] = [
     ("Pipeline", "console", "Console", "— pin a status card with buttons for everything below"),
     ("Pipeline", "status", "Status", "— counts, mode, verdicts"),
-    ("Pipeline", "queue", "Queue", "— approved posts; ▶ / ❌ per row"),
-    ("Pipeline", "pending", "Pending cards", "— resend every open card"),
+    ("Pipeline", "queue", "", "— approved posts; ▶ / ❌ per row"),
+    ("Pipeline", "pending", "", "— resend the newest 5 open cards"),
     ("Pipeline", "generate", "Generate", "[n] — draft n posts now"),
-    ("Pipeline", "postnow", "Post now", "[id] — publish next, or post #id"),
+    ("Pipeline", "postnow", "", "[id] — publish next, or post #id"),
     ("Pipeline", "requeue", "", "<id> — put a failed post back in the queue"),
-    ("Library", "stock", "Stock", "[unban <file>] — counts, banned list"),
-    ("Settings", "schedule", "Schedule", "[post 12:00,18:00 | generate 09:00 | reset]"),
-    ("Settings", "mode", "Mode", "[learning|live] — learning: ✅ = Keep, nothing posts"),
-    ("Settings", "distill", "Distill", "— from recent feedback"),
+    ("Library", "stock", "", "[unban <file>] — counts, banned list"),
+    ("Settings", "schedule", "", "[post 12:00,18:00 | generate 09:00 | reset]"),
+    ("Settings", "mode", "", "[learning|live] — learning: ✅ = Keep, nothing posts"),
+    ("Settings", "distill", "", "— from recent feedback"),
     ("Settings", "help", "Help", ""),
 ]
 _HELP_CARD = (
@@ -95,7 +96,10 @@ _HELP_CARD = (
     "off, then 🔁 Retry the same photo · ❌ Reject — pick a reason; 🚫 Ban image retires the photo"
 )
 _CALLBACK_DATA_MAX = 64  # bytes, Telegram's cap
+# Output caps: a console tap must never flood the chat or blow Telegram's 4096-char message.
 _PENDING_RESEND = 5  # /pending re-DMs only the newest cards; older ones stay open
+_LIST_ROWS = 10  # /queue and /stock show this many rows, then "+N more"
+_GENERATE_MAX = 10  # /generate n is clamped — each post is a paid vision call and a card
 # The pinned console card: one tap = one command, output replaces the card text.
 # /postnow is deliberately absent — publish from the ▶ button on a /queue row.
 _CONSOLE_GRID = [
@@ -547,13 +551,16 @@ async def _cmd_stock(
     e = html_lib.escape
     lines = [e(stock.summary_line(c))]
     keyboard: list[list[dict[str, str]]] = []
-    for ref in banned:
+    for ref in banned[:_LIST_ROWS]:
         data = f"unban:{ref}"
         if len(data.encode()) <= _CALLBACK_DATA_MAX:
             lines.append(f"🚫 <code>{e(ref)}</code>")
             keyboard.append([_btn(f"♻️ Unban {ref}", data)])
         else:  # too long for callback data — the typed command still works
             lines.append(f"🚫 <code>{e(ref)}</code> — /stock unban {e(ref)}")
+    if len(banned) > _LIST_ROWS:
+        more = len(banned) - _LIST_ROWS
+        lines.append(f"… +{more} more banned — /stock unban &lt;file&gt; works for any of them")
     await notifier.send_message("\n".join(lines), html=True, keyboard=keyboard or None)
 
 
@@ -564,6 +571,10 @@ async def _cmd_generate(
     from app.pipeline import review as _rev
 
     n = int(args) if args.isdigit() else settings.batch_size
+    if n > _GENERATE_MAX:
+        await notifier.send_message(f"Capped at {_GENERATE_MAX} per /generate.")
+        n = _GENERATE_MAX
+    n = max(n, 1)
     posts = await generate.generate_batch(session, n=n)
     await _rev.send_for_review(posts, notifier)
     await notifier.send_message(f"Generated {len(posts)} post(s) — check your review DMs.")
@@ -732,12 +743,14 @@ async def _cmd_queue(
     e = html_lib.escape
     lines = [f"<b>Queue</b> ({len(posts)} post(s))"]
     keyboard = []
-    for p in posts:
+    for p in posts[:_LIST_ROWS]:
         preview = (p.caption_he[:60] + "…") if len(p.caption_he) > 60 else p.caption_he
         lines.append(f"#{p.id} · pos {p.queue_position} · {e(preview)}")
         keyboard.append(
             [_btn(f"▶ Post now #{p.id}", f"postnow:{p.id}"), _btn("❌ Drop", f"drop:{p.id}")]
         )
+    if len(posts) > _LIST_ROWS:
+        lines.append(f"… +{len(posts) - _LIST_ROWS} more, in order")
     await notifier.send_message("\n".join(lines), html=True, keyboard=keyboard)
 
 

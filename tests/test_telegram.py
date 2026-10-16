@@ -356,7 +356,7 @@ async def test_set_my_commands_owner_scope(fake_http: type[_FakeHttp]) -> None:
     assert method == "setMyCommands"
     assert body["scope"] == {"type": "chat", "chat_id": str(_OWNER_ID)}
     cmds = [c["command"] for c in body["commands"]]
-    assert cmds[:2] == ["console", "status"] and cmds[-1] == "help" and "requeue" not in cmds
+    assert cmds == ["console", "status", "generate", "help"]
     assert all(len(c["description"]) <= 32 for c in body["commands"])
 
 
@@ -425,6 +425,23 @@ async def test_cmd_generate_custom_n(session: AsyncSession) -> None:
 
 
 # ─────────────────────────────── /queue command ──────────────────────────────
+
+
+async def test_cmd_generate_is_capped(session: AsyncSession) -> None:
+    notifier = _FakeNotifier()
+    await process_message(session, notifier, _msg(_OWNER_ID, "/generate 50"), _OWNER_SETTINGS)
+    assert notifier.messages[0] == "Capped at 10 per /generate."
+    assert len(notifier.suggestions) <= 10
+
+
+async def test_cmd_queue_shows_ten_rows_then_more(session: AsyncSession) -> None:
+    posts = await generate.generate_batch(session, n=12, brand="b")
+    for p in posts:
+        await review.handle_decision(session, p.id, "approve")
+    notifier = _FakeNotifier()
+    await process_message(session, notifier, _msg(_OWNER_ID, "/queue"), _OWNER_SETTINGS)
+    assert "(12 post(s))" in notifier.messages[0] and "+2 more" in notifier.messages[0]
+    assert len(notifier.keyboards[0] or []) == 10
 
 
 async def test_cmd_queue_empty(session: AsyncSession) -> None:
