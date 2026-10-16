@@ -63,9 +63,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if not settings.is_dev and settings.telegram_webhook_base:
         await _set_webhook()
         await notifier.set_my_commands()
-    live = settings.publishing_enabled and bool(
-        settings.instagram_access_token and settings.instagram_ig_user_id
-    )
+    live = settings.publishing_live
     # warning-level so the publish mode is always visible in prod logs (root logger is
     # at WARNING there — app INFO is filtered). ponytail: elevate this one banner rather
     # than reconfigure global logging.

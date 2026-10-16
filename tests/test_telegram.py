@@ -485,6 +485,7 @@ async def test_drop_callback_rejects_queued_post(session: AsyncSession) -> None:
     await session.refresh(posts[0])
     assert posts[0].status == PostStatus.REJECTED
     assert n.toasts == [("cq9", f"❌ Dropped #{posts[0].id}")]
+    assert n.messages[-1] == "Queue is empty."  # the list is refreshed after a drop
 
 
 async def test_postnow_callback_routes_to_publish(
@@ -556,7 +557,9 @@ async def test_console_card_sends_pins_and_edits_in_place(
     await process_message(session, n, msg, _OWNER_SETTINGS)
     (m1, b1), (m2, b2) = fake_http.calls
     grid = b1["reply_markup"]["inline_keyboard"]
-    assert m1 == "sendMessage" and grid[0][0]["callback_data"] == "con:status"
+    assert m1 == "sendMessage" and grid[0][0]["callback_data"] == "con:home"
+    assert grid[0][1]["text"] == "Queue 0" and grid[0][2]["text"] == "Pending 0"
+    assert "DRY-RUN" in b1["text"] and "0 waiting for review" in b1["text"]
     assert m2 == "pinChatMessage" and b2["message_id"] == 77 and b2["disable_notification"]
 
     fake_http.calls.clear()
@@ -574,7 +577,15 @@ async def test_console_card_sends_pins_and_edits_in_place(
     await process_callback(session, n, tap, _OWNER_SETTINGS)
     rows = fake_http.calls[1][1]["reply_markup"]["inline_keyboard"]
     assert [b["callback_data"] for b in rows[0]] == ["mode:learning", "mode:live"]
-    assert rows[1:] == [[{"text": "‹ Menu", "callback_data": "con:status"}]]
+    assert rows[0][1]["text"] == "🚀 Live ✓"
+    assert rows[1:] == [[{"text": "‹ Menu", "callback_data": "con:home"}]]
+
+    # Generate asks how many; the pick drafts with a progress line first
+    fake_http.calls.clear()
+    tap = {"id": "c", "data": "con:generate", "message": card}
+    await process_callback(session, n, tap, _OWNER_SETTINGS)
+    rows = fake_http.calls[1][1]["reply_markup"]["inline_keyboard"]
+    assert [b["callback_data"] for b in rows[0]] == ["gen:1", "gen:3", "gen:5"]
 
     # a tap on a plain /queue DM (no grid) still replies with a new message
     fake_http.calls.clear()
@@ -616,20 +627,44 @@ async def test_cmd_pending_no_pending(session: AsyncSession) -> None:
     assert notifier.messages[0] == "No pending posts."
 
 
-async def test_cmd_pending_resends(session: AsyncSession) -> None:
+async def test_cmd_pending_lists_and_offers_resend(session: AsyncSession) -> None:
     posts = await generate.generate_batch(session, n=2, brand="b")
     notifier = _FakeNotifier()
     await process_message(session, notifier, _msg(_OWNER_ID, "/pending"), _OWNER_SETTINGS)
-    assert "2 pending" in notifier.messages[0]
-    assert len(notifier.suggestions) == len(posts)
+    assert "2 pending" in notifier.messages[0] and f"#{posts[-1].id}" in notifier.messages[0]
+    [[btn]] = notifier.keyboards[0] or [[]]
+    assert btn == {"text": "🔁 Resend newest 2", "callback_data": "pend:resend"}
+    assert notifier.suggestions == []  # listing never resends
 
 
-async def test_cmd_pending_resends_only_latest_five(session: AsyncSession) -> None:
+async def test_pending_resend_button_sends_only_latest_five(session: AsyncSession) -> None:
     posts = await generate.generate_batch(session, n=7, brand="b")
     notifier = _FakeNotifier()
-    await process_message(session, notifier, _msg(_OWNER_ID, "/pending"), _OWNER_SETTINGS)
-    assert "7 pending" in notifier.messages[0] and "latest 5" in notifier.messages[0]
+    await process_callback(session, notifier, _owner_cb("pend:resend"), _OWNER_SETTINGS)
+    assert notifier.messages[0].startswith("⏳ Resending")
+    assert "7 pending" in notifier.messages[1] and "latest 5" in notifier.messages[1]
     assert [p.id for p in notifier.suggestions] == [p.id for p in posts[-5:]]
+
+
+async def test_gen_callback_drafts_with_progress_line(session: AsyncSession) -> None:
+    notifier = _FakeNotifier()
+    await process_callback(session, notifier, _owner_cb("gen:3"), _OWNER_SETTINGS)
+    assert notifier.messages[0].startswith("⏳ Drafting 3")
+    assert len(notifier.suggestions) == 3 and "Generated 3" in notifier.messages[1]
+
+
+async def test_home_has_no_dry_run_line_when_live(session: AsyncSession) -> None:
+    from app.notifier.telegram import _build_home
+
+    live = _OWNER_SETTINGS.model_copy(
+        update={
+            "publishing_enabled": True,
+            "instagram_access_token": "t",
+            "instagram_ig_user_id": "1",
+        }
+    )
+    text = await _build_home(session, _FakeNotifier(), live)  # type: ignore[arg-type]
+    assert "DRY-RUN" not in text and "🚀" in text and "updated" in text
 
 
 # ── ✏️ Fix (M8.2) ────────────────────────────────────────────────────────────

@@ -27,8 +27,10 @@ import json
 import logging
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 from sqlalchemy import func, select
@@ -103,10 +105,12 @@ _GENERATE_MAX = 10  # /generate n is clamped — each post is a paid vision call
 # The pinned console card: one tap = one command, output replaces the card text.
 # /postnow is deliberately absent — publish from the ▶ button on a /queue row.
 _CONSOLE_GRID = [
-    ["Status", "Queue", "Pending"],
+    ["Home", "Queue", "Pending"],
     ["Generate", "Stock", "Schedule"],
-    ["Mode", "Help"],
+    ["Mode", "Status", "Help"],
 ]
+_COUNTED = {"Queue": "queue", "Pending": "pending", "Stock": "stock"}  # label → counts key
+_TOASTS = {"generate": "How many?", "home": "Home", "status": "Status…"}
 
 
 class TelegramNotifier:
@@ -199,14 +203,14 @@ class TelegramNotifier:
             plain = html_lib.unescape(re.sub(r"<[^>]+>", "", text))
             await self.send_message(plain, keyboard=keyboard)
 
-    async def send_console(self, text: str) -> None:
+    async def send_console(self, text: str, rows: list[list[dict[str, str]]]) -> None:
         """Send the console card (HTML + button grid) and pin it, silently."""
         chat = self._settings.telegram_chat_id
         body = {
             "chat_id": chat,
             "text": text,
             "parse_mode": "HTML",
-            "reply_markup": {"inline_keyboard": _console_rows()},
+            "reply_markup": {"inline_keyboard": rows},
         }
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(self._url("sendMessage"), json=body)
@@ -404,10 +408,28 @@ def _btn(text: str, data: str) -> dict[str, str]:
     return {"text": text, "callback_data": data}
 
 
-def _console_rows(back_only: bool = False) -> list[list[dict[str, str]]]:
+async def _console_counts(session: AsyncSession, settings: Settings) -> dict[str, int]:
+    """The numbers the grid labels and the home card show: pending, queue, unused stock."""
+    rows = (await session.execute(select(Post.status, func.count()).group_by(Post.status))).all()
+    by: dict[PostStatus, int] = {r[0]: r[1] for r in rows}
+    return {
+        "pending": by.get(PostStatus.SUGGESTED, 0),
+        "queue": by.get(PostStatus.APPROVED, 0) + by.get(PostStatus.PUBLISHING, 0),
+        "stock": (await stock.counts(session, settings))["unused"],
+    }
+
+
+def _console_rows(
+    counts: dict[str, int] | None = None, back_only: bool = False
+) -> list[list[dict[str, str]]]:
     if back_only:
-        return [[_btn("‹ Menu", "con:status")]]
-    return [[_btn(label, f"con:{label.lower()}") for label in row] for row in _CONSOLE_GRID]
+        return [[_btn("‹ Menu", "con:home")]]
+
+    def label(name: str) -> str:
+        key = _COUNTED.get(name)
+        return f"{name} {counts[key]}" if counts and key else name
+
+    return [[_btn(label(name), f"con:{name.lower()}") for name in row] for row in _CONSOLE_GRID]
 
 
 class _CardWriter(TelegramNotifier):
@@ -421,10 +443,11 @@ class _CardWriter(TelegramNotifier):
     the grid kept underneath. Everything else (cards, toasts) still goes out normally.
     """
 
-    def __init__(self, base: TelegramNotifier, message_id: int) -> None:
+    def __init__(self, base: TelegramNotifier, message_id: int, session: AsyncSession) -> None:
         super().__init__(base._settings)
         self.scheduler = base.scheduler
         self._message_id = message_id
+        self._session = session  # for the live counts on the grid labels
 
     async def send_message(
         self,
@@ -433,12 +456,15 @@ class _CardWriter(TelegramNotifier):
         html: bool = False,
         keyboard: list[list[dict[str, str]]] | None = None,
     ) -> None:
+        if keyboard:  # a command with its own buttons gets a sub-menu: its buttons + one way back
+            rows = keyboard + _console_rows(back_only=True)
+        else:
+            rows = _console_rows(await _console_counts(self._session, self._settings))
         body: dict[str, Any] = {
             "chat_id": self._settings.telegram_chat_id,
             "message_id": self._message_id,
             "text": text,
-            # A command with its own buttons gets a sub-menu: its buttons + one way back.
-            "reply_markup": {"inline_keyboard": (keyboard or []) + _console_rows(bool(keyboard))},
+            "reply_markup": {"inline_keyboard": rows},
         }
         if html:
             body["parse_mode"] = "HTML"
@@ -450,12 +476,12 @@ class _CardWriter(TelegramNotifier):
             await self.send_message(plain, keyboard=keyboard)
 
 
-def _card_or_chat(notifier: TelegramNotifier, cb: dict) -> TelegramNotifier:
+def _card_or_chat(notifier: TelegramNotifier, cb: dict, session: AsyncSession) -> TelegramNotifier:
     """Taps on the console card edit the card; taps elsewhere (a /queue DM) reply as usual."""
     markup = json.dumps(cb["message"].get("reply_markup") or {})
     if '"con:' not in markup:
         return notifier
-    return _CardWriter(notifier, cb["message"]["message_id"])
+    return _CardWriter(notifier, cb["message"]["message_id"], session)
 
 
 _DISTILL_DIFF_LIMIT = 3000  # keeps rationale + diff inside Telegram's 4096-char message cap
@@ -519,10 +545,41 @@ async def _cmd_status(
     await notifier.send_message(await _build_status_summary(session, settings), html=True)
 
 
+async def _build_home(
+    session: AsyncSession, notifier: TelegramNotifier, settings: Settings
+) -> str:
+    """The card's default body: what needs the owner, not the raw status dump."""
+    c = await _console_counts(session, settings)
+    e = html_lib.escape
+    learning = await prefs.mode(session) == prefs.LEARNING
+    lines = [
+        "🎓 <b>Learning mode</b> — nothing publishes" if learning else "🚀 <b>Live</b>",
+    ]
+    if not settings.publishing_live:
+        lines.append("🔴 <b>DRY-RUN</b> — publishing is off, nothing reaches Instagram")
+    lines.append(f"🟡 {c['pending']} waiting for review")
+    runs = sched.next_runs(notifier.scheduler) if notifier.scheduler is not None else {}
+    nxt = min((t for k, t in runs.items() if k.startswith("posting-") and t), default=None)
+    queued = f"📬 {c['queue']} queued"
+    lines.append(f"{queued} · next post {_fmt_next(nxt)}" if nxt else queued)
+    lines.append(f"📷 {c['stock']} unused photos")
+    lines.append("📚 " + e((await _learning_line(session, settings)).split("\n")[0]))
+    now = datetime.now(ZoneInfo(settings.schedule_tz)).strftime("%H:%M")
+    lines.append(f"<i>updated {now}</i>")
+    return "\n".join(lines)
+
+
 async def _cmd_console(
     session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
 ) -> None:
-    await notifier.send_console(await _build_status_summary(session, settings))
+    text = await _build_home(session, notifier, settings)
+    await notifier.send_console(text, _console_rows(await _console_counts(session, settings)))
+
+
+async def _cmd_home(
+    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+) -> None:
+    await notifier.send_message(await _build_home(session, notifier, settings), html=True)
 
 
 async def _cmd_help(
@@ -620,6 +677,10 @@ async def _cmd_postnow(
             await notifier.send_message(f"Post #{post.id} publish failed.")
 
 
+def _tick(on: bool) -> str:
+    return " ✓" if on else ""
+
+
 async def _cmd_mode(
     session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
 ) -> None:
@@ -631,8 +692,8 @@ async def _cmd_mode(
             html=True,
             keyboard=[
                 [
-                    _btn("🎓 Learning", f"mode:{prefs.LEARNING}"),
-                    _btn("🚀 Live", f"mode:{prefs.LIVE}"),
+                    _btn(f"🎓 Learning{_tick(current == prefs.LEARNING)}", "mode:learning"),
+                    _btn(f"🚀 Live{_tick(current == prefs.LIVE)}", "mode:live"),
                 ]
             ],
         )
@@ -844,6 +905,32 @@ async def _cmd_requeue(
 async def _cmd_pending(
     session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
 ) -> None:
+    """List what awaits review; resend only on request (``/pending resend`` or the button)."""
+    if args.strip().lower() == "resend":
+        await _resend_pending(session, notifier)
+        return
+    posts = (
+        await session.scalars(
+            select(Post).where(Post.status == PostStatus.SUGGESTED).order_by(Post.id.desc())
+        )
+    ).all()
+    if not posts:
+        await notifier.send_message("No pending posts.")
+        return
+    e = html_lib.escape
+    lines = [f"<b>{len(posts)} pending</b> — newest first"]
+    for p in posts[:_LIST_ROWS]:
+        preview = (p.caption_he[:60] + "…") if len(p.caption_he) > 60 else p.caption_he
+        lines.append(f"#{p.id} · {e(preview)}")
+    if len(posts) > _LIST_ROWS:
+        lines.append(f"… +{len(posts) - _LIST_ROWS} more")
+    n = min(len(posts), _PENDING_RESEND)
+    await notifier.send_message(
+        "\n".join(lines), html=True, keyboard=[[_btn(f"🔁 Resend newest {n}", "pend:resend")]]
+    )
+
+
+async def _resend_pending(session: AsyncSession, notifier: TelegramNotifier) -> None:
     from app.pipeline import review as _rev
 
     total = await session.scalar(
@@ -881,6 +968,7 @@ async def _cmd_distill(
 
 _HANDLERS: dict[str, Any] = {
     "/console": _cmd_console,
+    "/home": _cmd_home,
     "/status": _cmd_status,
     "/generate": _cmd_generate,
     "/postnow": _cmd_postnow,
@@ -1014,7 +1102,7 @@ async def process_callback(
         return
 
     # ── console buttons (/queue, /stock, /mode): state-changing, so owner-gated ──
-    if data.startswith(("con:", "sch:", "postnow:", "drop:", "unban:", "mode:")):
+    if data.startswith(("con:", "gen:", "pend:", "sch:", "postnow:", "drop:", "unban:", "mode:")):
         await _console_callback(session, notifier, cb, settings or get_settings())
         return
 
@@ -1164,14 +1252,27 @@ async def _console_callback(
         logger.warning("Ignoring console callback from non-owner chat.")
         return
     action, _, arg = cb.get("data", "").partition(":")
-    notifier = _card_or_chat(notifier, cb)
+    notifier = _card_or_chat(notifier, cb, session)
     if action == "sch":
         await _schedule_callback(session, notifier, cb, arg, settings)
+    elif action == "con" and arg == "generate":
+        await notifier.answer_callback(cb["id"], _TOASTS["generate"])
+        await notifier.send_message(
+            "Draft how many?", keyboard=[[_btn(str(n), f"gen:{n}") for n in (1, 3, 5)]]
+        )
     elif action == "con":
         handler = _HANDLERS.get(f"/{arg}") if arg != "console" else None
         if handler is not None:
-            await notifier.answer_callback(cb["id"], "")
+            await notifier.answer_callback(cb["id"], _TOASTS.get(arg, f"{arg.capitalize()}…"))
             await handler(session, notifier, "", settings)
+    elif action == "gen" and arg.isdigit():
+        await notifier.answer_callback(cb["id"], f"⏳ Drafting {arg}…")
+        await notifier.send_message(f"⏳ Drafting {arg} post(s)… cards arrive below.")
+        await _cmd_generate(session, notifier, arg, settings)
+    elif action == "pend" and arg == "resend":
+        await notifier.answer_callback(cb["id"], "⏳ Resending…")
+        await notifier.send_message("⏳ Resending the newest cards…")
+        await _resend_pending(session, notifier)
     elif action == "postnow" and arg.isdigit():
         await notifier.answer_callback(cb["id"], f"▶ Publishing #{arg}…")
         await _cmd_postnow(session, notifier, arg, settings)
@@ -1185,6 +1286,7 @@ async def _console_callback(
         else:
             toast = f"❌ Dropped #{post.id}"
         await notifier.answer_callback(cb["id"], toast)
+        await _cmd_queue(session, notifier, "", settings)  # the list is stale now
     elif action == "unban" and arg:
         ok = await stock.unban_image(session, arg)
         await session.commit()

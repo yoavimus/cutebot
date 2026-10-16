@@ -80,12 +80,15 @@ the grouped `/help`. Output is HTML; values are escaped.
 
 ```
 Pipeline
-/console                pin a status card with a button grid; every tap runs a command and
-                        rewrites the card in place (Status · Queue · Pending / Generate · Stock ·
-                        Schedule / Mode · Help — publish from a /queue ▶ row, not the grid)
+/console                pin the home card (mode, DRY-RUN warning, waiting / queued + next post,
+                        unused photos, learning line, updated HH:MM) with a button grid; every tap
+                        runs a command and rewrites the card in place (Home · Queue N · Pending N /
+                        Generate · Stock N · Schedule / Mode · Status · Help — publish from a
+                        /queue ▶ row, not the grid). Generate asks 1 · 3 · 5 first.
 /status                 mode header, counts by status, queue depth, stock, learning verdicts, last 5 published
 /queue                  approved posts in order, first 10 rows (+N more) — ▶ Post now / ❌ Drop per row
-/pending                re-DM the newest 5 undecided suggestions (count line first; older stay open)
+/pending [resend]       list undecided suggestions (10 rows, newest first) with a 🔁 Resend newest 5
+                        button; "resend" (typed or the button) re-DMs them, older cards stay open
 /generate [n]           generate n suggestions now (default BATCH_SIZE, capped at 10) + DM for review
 /postnow [id]           publish front-of-queue, or a specific APPROVED post (refused in learning mode / on kept)
 /requeue <id>           move a FAILED post back into the queue (typed only — not in the menu)
@@ -112,7 +115,7 @@ default scope so the menu never disappears. Labels are one or two plain words (�
 the pinned card runs the same handler as the typed command with a notifier whose
 `send_message` edits the card (`editMessageText`) and keeps the grid under the output; when the
 command brings its own buttons (`/mode`, `/queue`, `/stock`) the card shows only those plus a
-"‹ Menu" row that redraws the status card. Taps
+"‹ Menu" row that redraws the home card; grid labels carry live counts. Taps
 on an ordinary DM (a `/queue` list) reply with a new message as before. The card is one
 message, so Telegram's 4096-char limit applies; `/stock` and `/queue` already cap their rows.
 
@@ -128,6 +131,7 @@ message, so Telegram's 4096-char limit applies; `/stock` and `/queue` already ca
 | `fix:<id>` | ForceReply prompt for the corrected caption |
 | `postnow:<id>` / `drop:<id>` | `/queue` row buttons → `publish_by_id` / reject (owner-gated) |
 | `unban:<ref>` | `/stock` row button; refs over Telegram's 64-byte callback cap show the typed command instead |
+| `con:<cmd>` · `gen:<1\|3\|5>` · `pend:resend` | console card taps (owner-gated); long ones show "⏳ …" in the card first |
 | `sch:view` · `sch:pick:add\|gen` · `sch:add:<H>` · `sch:del:<HHMM>` · `sch:gen:<H>` · `sch:reset` | `/schedule` edit buttons; each replays through `_cmd_schedule` (owner-gated) |
 | `mode:learning` / `mode:live` | `/mode` confirm keyboard (owner-gated; `mode:cancel` still toasts for old cards) |
 | `distill:apply\|discard:<token>` | `/distill` proposal (owner-gated) |
