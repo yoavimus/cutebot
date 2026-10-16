@@ -104,8 +104,8 @@ Settings
 
 **Slash menu** — registered with `setMyCommands` at startup, scoped to the owner chat
 (`scope: {type: chat, chat_id}`); if Telegram rejects the scoped call it falls back to the
-default scope so the menu never disappears. Labels are one or two plain words (≤ 16 chars); `/requeue`
-is not in the menu. After changing labels, restart so the app re-registers them.
+default scope so the menu never disappears. Labels are one or two plain words (≤ 16 chars). The menu lists only
+`/console`, `/status`, `/generate`, `/help`; everything else is on the console card and typeable. After changing labels, restart so the app re-registers them.
 
 **Console card** — `_CONSOLE_GRID` + `_CardWriter` in `app/notifier/telegram.py`: a tap on
 the pinned card runs the same handler as the typed command with a notifier whose

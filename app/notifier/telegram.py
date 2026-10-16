@@ -72,21 +72,22 @@ _EDIT_REF = re.compile(r"post #(\d+) · card (\d+)")
 # (group, command, menu_label, usage). Row order = menu order (frequency, settings last).
 # menu_label: one or two plain words, no emoji, ≤ 16 chars — Telegram lists it beside
 # the command, so a sentence there is noise;
-# "" keeps a command out of the menu (still typed, still in /help). usage = args + detail,
-# shown by /help only.
+# "" keeps a command out of the menu (still typed, still in /help, most on the /console
+# card). The menu only has to reach the card and the commands that take arguments.
+# usage = args + detail, shown by /help only.
 _MENU_LABEL_MAX = 16
 _COMMANDS: list[tuple[str, str, str, str]] = [
     ("Pipeline", "console", "Console", "— pin a status card with buttons for everything below"),
     ("Pipeline", "status", "Status", "— counts, mode, verdicts"),
-    ("Pipeline", "queue", "Queue", "— approved posts; ▶ / ❌ per row"),
-    ("Pipeline", "pending", "Pending cards", "— resend every open card"),
+    ("Pipeline", "queue", "", "— approved posts; ▶ / ❌ per row"),
+    ("Pipeline", "pending", "", "— resend the newest 5 open cards"),
     ("Pipeline", "generate", "Generate", "[n] — draft n posts now"),
-    ("Pipeline", "postnow", "Post now", "[id] — publish next, or post #id"),
+    ("Pipeline", "postnow", "", "[id] — publish next, or post #id"),
     ("Pipeline", "requeue", "", "<id> — put a failed post back in the queue"),
-    ("Library", "stock", "Stock", "[unban <file>] — counts, banned list"),
-    ("Settings", "schedule", "Schedule", "[post 12:00,18:00 | generate 09:00 | reset]"),
-    ("Settings", "mode", "Mode", "[learning|live] — learning: ✅ = Keep, nothing posts"),
-    ("Settings", "distill", "Distill", "— from recent feedback"),
+    ("Library", "stock", "", "[unban <file>] — counts, banned list"),
+    ("Settings", "schedule", "", "[post 12:00,18:00 | generate 09:00 | reset]"),
+    ("Settings", "mode", "", "[learning|live] — learning: ✅ = Keep, nothing posts"),
+    ("Settings", "distill", "", "— from recent feedback"),
     ("Settings", "help", "Help", ""),
 ]
 _HELP_CARD = (

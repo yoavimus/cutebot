@@ -356,7 +356,7 @@ async def test_set_my_commands_owner_scope(fake_http: type[_FakeHttp]) -> None:
     assert method == "setMyCommands"
     assert body["scope"] == {"type": "chat", "chat_id": str(_OWNER_ID)}
     cmds = [c["command"] for c in body["commands"]]
-    assert cmds[:2] == ["console", "status"] and cmds[-1] == "help" and "requeue" not in cmds
+    assert cmds == ["console", "status", "generate", "help"]
     assert all(len(c["description"]) <= 32 for c in body["commands"])
 
 
