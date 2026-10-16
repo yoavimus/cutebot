@@ -69,6 +69,13 @@ class Settings(BaseSettings):
     publishing_enabled: bool = True
     instagram_access_token: str = ""
     instagram_ig_user_id: str = ""
+
+    @property
+    def publishing_live(self) -> bool:
+        """Real Instagram posting; otherwise the publisher is a dry-run stub."""
+        return self.publishing_enabled and bool(
+            self.instagram_access_token and self.instagram_ig_user_id
+        )
     instagram_graph_version: str = "v21.0"
     # Origin CuteBot serves GET /media/... from (Graph fetches the image over HTTPS).
     # Usually the same Railway URL as telegram_webhook_base, kept distinct in case

@@ -76,11 +76,7 @@ def get_publishers() -> list[Publisher]:
     """
     settings = get_settings()
     instagram: Publisher
-    if (
-        settings.publishing_enabled
-        and settings.instagram_access_token
-        and settings.instagram_ig_user_id
-    ):
+    if settings.publishing_live:
         from app.publishers.instagram import InstagramPublisher as RealInstagramPublisher
 
         instagram = RealInstagramPublisher()
