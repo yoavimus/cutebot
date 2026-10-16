@@ -85,7 +85,7 @@ Pipeline
                         Schedule / Mode · Help — publish from a /queue ▶ row, not the grid)
 /status                 mode header, counts by status, queue depth, stock, learning verdicts, last 5 published
 /queue                  approved posts in order — each row has ▶ Post now / ❌ Drop buttons
-/pending                re-DM undecided suggestions (count line first)
+/pending                re-DM the newest 5 undecided suggestions (count line first; older stay open)
 /generate [n]           generate n suggestions now (default BATCH_SIZE) + DM for review
 /postnow [id]           publish front-of-queue, or a specific APPROVED post (refused in learning mode / on kept)
 /requeue <id>           move a FAILED post back into the queue (typed only — not in the menu)

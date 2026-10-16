@@ -95,6 +95,7 @@ _HELP_CARD = (
     "off, then 🔁 Retry the same photo · ❌ Reject — pick a reason; 🚫 Ban image retires the photo"
 )
 _CALLBACK_DATA_MAX = 64  # bytes, Telegram's cap
+_PENDING_RESEND = 5  # /pending re-DMs only the newest cards; older ones stay open
 # The pinned console card: one tap = one command, output replaces the card text.
 # /postnow is deliberately absent — publish from the ▶ button on a /queue row.
 _CONSOLE_GRID = [
@@ -765,12 +766,23 @@ async def _cmd_pending(
 ) -> None:
     from app.pipeline import review as _rev
 
-    posts = (await session.scalars(select(Post).where(Post.status == PostStatus.SUGGESTED))).all()
-    if not posts:
+    total = await session.scalar(
+        select(func.count()).select_from(Post).where(Post.status == PostStatus.SUGGESTED)
+    )
+    if not total:
         await notifier.send_message("No pending posts.")
         return
-    await notifier.send_message(f"<b>{len(posts)} pending post(s)</b> — resending…", html=True)
-    await _rev.send_for_review(list(posts), notifier)
+    latest = (
+        await session.scalars(
+            select(Post)
+            .where(Post.status == PostStatus.SUGGESTED)
+            .order_by(Post.id.desc())
+            .limit(_PENDING_RESEND)
+        )
+    ).all()
+    tail = f" — resending the latest {len(latest)}…" if total > len(latest) else " — resending…"
+    await notifier.send_message(f"<b>{total} pending post(s)</b>{tail}", html=True)
+    await _rev.send_for_review(list(reversed(latest)), notifier)  # oldest first, newest on top
 
 
 async def _cmd_distill(
