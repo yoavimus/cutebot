@@ -70,27 +70,23 @@ _EDIT_REF = re.compile(r"post #(\d+) · card (\d+)")
 
 # One table drives Telegram's "/" menu (setMyCommands) and the grouped /help.
 # (group, command, menu_label, usage). Row order = menu order (frequency, settings last).
-# menu_label: plain text, no emoji, verb-first, ≤ 32 chars so phones don't truncate;
+# menu_label: one or two plain words, no emoji, ≤ 16 chars — Telegram lists it beside
+# the command, so a sentence there is noise;
 # "" keeps a command out of the menu (still typed, still in /help). usage = args + detail,
 # shown by /help only.
-_MENU_LABEL_MAX = 32
+_MENU_LABEL_MAX = 16
 _COMMANDS: list[tuple[str, str, str, str]] = [
-    ("Pipeline", "status", "Pipeline, queue and stock counts", "— counts, mode, verdicts"),
-    ("Pipeline", "queue", "Approved posts, in order", "— approved posts; ▶ / ❌ per row"),
-    ("Pipeline", "pending", "Resend cards awaiting review", "— resend every open card"),
-    ("Pipeline", "generate", "Draft a batch now", "[n] — draft n posts now"),
-    ("Pipeline", "postnow", "Publish the next queued post", "[id] — publish next, or post #id"),
+    ("Pipeline", "status", "Status", "— counts, mode, verdicts"),
+    ("Pipeline", "queue", "Queue", "— approved posts; ▶ / ❌ per row"),
+    ("Pipeline", "pending", "Pending cards", "— resend every open card"),
+    ("Pipeline", "generate", "Generate", "[n] — draft n posts now"),
+    ("Pipeline", "postnow", "Post now", "[id] — publish next, or post #id"),
     ("Pipeline", "requeue", "", "<id> — put a failed post back in the queue"),
-    ("Library", "stock", "Stock library", "[unban <file>] — counts, banned list"),
-    (
-        "Settings",
-        "schedule",
-        "View or change the slots",
-        "[post 12:00,18:00 | generate 09:00 | reset]",
-    ),
-    ("Settings", "mode", "Learning / live", "[learning|live] — learning: ✅ = Keep, nothing posts"),
-    ("Settings", "distill", "Propose a brand.md revision", "— from recent feedback"),
-    ("Settings", "help", "All commands + arguments", ""),
+    ("Library", "stock", "Stock", "[unban <file>] — counts, banned list"),
+    ("Settings", "schedule", "Schedule", "[post 12:00,18:00 | generate 09:00 | reset]"),
+    ("Settings", "mode", "Mode", "[learning|live] — learning: ✅ = Keep, nothing posts"),
+    ("Settings", "distill", "Distill", "— from recent feedback"),
+    ("Settings", "help", "Help", ""),
 ]
 _HELP_CARD = (
     "✅ Approve — publish · 📚 Keep — good, learning only, never posts · ✏️ Fix — reply with the "

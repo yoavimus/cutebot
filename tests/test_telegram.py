@@ -310,7 +310,7 @@ def test_command_table_menu_labels() -> None:
     from app.notifier.telegram import _COMMANDS, _HANDLERS
 
     labelled = [(c, label) for _, c, label, _ in _COMMANDS if label]
-    assert all(len(label) <= 32 for _, label in labelled)
+    assert all(len(label) <= 16 for _, label in labelled)
     assert all(re.fullmatch(r"[A-Za-z0-9 ,./+-]+", label) for _, label in labelled)  # no emoji
     assert "requeue" not in [c for c, _ in labelled]
     assert {f"/{c}" for _, c, _, _ in _COMMANDS} <= set(_HANDLERS)

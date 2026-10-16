@@ -101,7 +101,7 @@ Settings
 
 **Slash menu** — registered with `setMyCommands` at startup, scoped to the owner chat
 (`scope: {type: chat, chat_id}`); if Telegram rejects the scoped call it falls back to the
-default scope so the menu never disappears. Labels are plain text, ≤ 32 chars; `/requeue`
+default scope so the menu never disappears. Labels are one or two plain words (≤ 16 chars); `/requeue`
 is not in the menu. After changing labels, restart so the app re-registers them.
 
 **Card keyboard** (M9.1): `✅ Approve · 📚 Keep · ✏️ Fix` / `🤏 Almost · ❌ Reject`.
