@@ -404,12 +404,17 @@ def _btn(text: str, data: str) -> dict[str, str]:
     return {"text": text, "callback_data": data}
 
 
-def _console_rows() -> list[list[dict[str, str]]]:
+def _console_rows(back_only: bool = False) -> list[list[dict[str, str]]]:
+    if back_only:
+        return [[_btn("‹ Menu", "con:status")]]
     return [[_btn(label, f"con:{label.lower()}") for label in row] for row in _CONSOLE_GRID]
 
 
 class _CardWriter(TelegramNotifier):
     """A notifier whose ``send_message`` edits the console card instead of sending.
+
+    Output without buttons shows the full grid; output with buttons (``/mode`` confirm,
+    ``/queue`` rows) shows only those plus "‹ Menu", which redraws the status card.
 
     Handlers stay untouched: a tap on the card runs the same handler as the typed
     command, and its output (plus any buttons it adds) replaces the card body, with
@@ -432,7 +437,8 @@ class _CardWriter(TelegramNotifier):
             "chat_id": self._settings.telegram_chat_id,
             "message_id": self._message_id,
             "text": text,
-            "reply_markup": {"inline_keyboard": (keyboard or []) + _console_rows()},
+            # A command with its own buttons gets a sub-menu: its buttons + one way back.
+            "reply_markup": {"inline_keyboard": (keyboard or []) + _console_rows(bool(keyboard))},
         }
         if html:
             body["parse_mode"] = "HTML"
@@ -627,7 +633,6 @@ async def _cmd_mode(
                 [
                     _btn("🎓 Learning", f"mode:{prefs.LEARNING}"),
                     _btn("🚀 Live", f"mode:{prefs.LIVE}"),
-                    _btn("Cancel", "mode:cancel"),
                 ]
             ],
         )

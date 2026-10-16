@@ -568,6 +568,14 @@ async def test_console_card_sends_pins_and_edits_in_place(
     assert body["message_id"] == 77 and "/status" in body["text"]
     assert body["reply_markup"]["inline_keyboard"][-len(grid) :] == grid
 
+    # a command with its own buttons becomes a sub-menu: its buttons + one "‹ Menu" row
+    fake_http.calls.clear()
+    tap = {"id": "c", "data": "con:mode", "message": card}
+    await process_callback(session, n, tap, _OWNER_SETTINGS)
+    rows = fake_http.calls[1][1]["reply_markup"]["inline_keyboard"]
+    assert [b["callback_data"] for b in rows[0]] == ["mode:learning", "mode:live"]
+    assert rows[1:] == [[{"text": "‹ Menu", "callback_data": "con:status"}]]
+
     # a tap on a plain /queue DM (no grid) still replies with a new message
     fake_http.calls.clear()
     plain = {"message_id": 5, "chat": {"id": _OWNER_ID}}

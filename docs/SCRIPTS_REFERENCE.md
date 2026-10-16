@@ -109,7 +109,9 @@ default scope so the menu never disappears. Labels are one or two plain words (�
 
 **Console card** — `_CONSOLE_GRID` + `_CardWriter` in `app/notifier/telegram.py`: a tap on
 the pinned card runs the same handler as the typed command with a notifier whose
-`send_message` edits the card (`editMessageText`) and keeps the grid under the output. Taps
+`send_message` edits the card (`editMessageText`) and keeps the grid under the output; when the
+command brings its own buttons (`/mode`, `/queue`, `/stock`) the card shows only those plus a
+"‹ Menu" row that redraws the status card. Taps
 on an ordinary DM (a `/queue` list) reply with a new message as before. The card is one
 message, so Telegram's 4096-char limit applies; `/stock` and `/queue` already cap their rows.
 
@@ -125,7 +127,7 @@ message, so Telegram's 4096-char limit applies; `/stock` and `/queue` already ca
 | `fix:<id>` | ForceReply prompt for the corrected caption |
 | `postnow:<id>` / `drop:<id>` | `/queue` row buttons → `publish_by_id` / reject (owner-gated) |
 | `unban:<ref>` | `/stock` row button; refs over Telegram's 64-byte callback cap show the typed command instead |
-| `mode:learning` / `mode:live` / `mode:cancel` | `/mode` confirm keyboard (owner-gated) |
+| `mode:learning` / `mode:live` | `/mode` confirm keyboard (owner-gated; `mode:cancel` still toasts for old cards) |
 | `distill:apply\|discard:<token>` | `/distill` proposal (owner-gated) |
 
 Rejecting a post (❌) offers one-tap reason chips (voice/hebrew/image/boring/skip) —
