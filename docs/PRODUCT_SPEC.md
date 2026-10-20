@@ -138,9 +138,11 @@ external worker in v1 — the scheduler runs in the app process.
 ## 6. Configuration
 
 All via env (`app/config.py`, `pydantic-settings`). See `env.example`. Brand
-guidelines live in a Markdown file (`BRAND_FILE`, default `brand.md`; template
-`brand.example.md`) and are injected into the generation prompt verbatim; `/distill`
-can propose revisions to it from accumulated feedback, applied only after an explicit ✅. The owner-provided stock images live in a
+guidelines live on the brand row (`brands.brand_text`, previous version in
+`brand_text_prev`) and are injected into the generation prompt verbatim; `BRAND_FILE`
+(default `brand.md`; template `brand.example.md`) only seeds row 1 at boot, and
+`scripts/brand_sync.py` pushes/pulls between file and row. `/distill` can propose
+revisions from accumulated feedback, applied only after an explicit ✅. The owner-provided stock images live in a
 configured directory (`STOCK_IMAGES_DIR`); generation picks an image from this library
 first (setting `image_ref`), then writes the caption to match it (see §3).
 
@@ -171,7 +173,7 @@ Items defined at v1 (2026-07), with status:
 
 - **A. Learning loop** — **shipped (M8)**: `app/learning.py` feeds approved examples,
   owner corrections, reject hints and recent posts into every caption; `/distill`
-  proposes `brand.md` revisions from the same evidence.
+  proposes brand-text revisions from the same evidence.
 - **B. Image generation** — *deferred for the foreseeable future.* v1 is image-first off
   the owner's stock library (§3). This item would reintroduce a text-first path: generate
   a caption, then synthesize a matching image from `visual_concept` (e.g. an image model)

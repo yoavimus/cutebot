@@ -9,7 +9,7 @@ Callback data:
   ``almost:<post_id>``             → 🤏 Almost: show the "What's off?" chips (no ban chip)
   ``almostr:<post_id>:<reason>``   → apply Almost with the chip (or "skip")
   ``retry:<post_id>``              → 🔁 re-caption an Almost'd post's image as a new card
-  ``distill:apply|discard:<token>`` → owner's answer to a /distill brand.md proposal
+  ``distill:apply|discard:<token>`` → owner's answer to a /distill brand-text proposal
   ``fix:<post_id>``                → ForceReply prompt; the owner's reply (``#<id>`` in the
                                      prompt text — stateless) replaces the caption and approves
 
@@ -90,6 +90,7 @@ _COMMANDS: list[tuple[str, str, str, str]] = [
     ("Settings", "schedule", "", "[post 12:00,18:00 | generate 09:00 | reset]"),
     ("Settings", "mode", "", "[learning|live] — learning: ✅ = Keep, nothing posts"),
     ("Settings", "distill", "", "— from recent feedback"),
+    ("Settings", "brand", "", "— show the current brand text"),
     ("Settings", "help", "Help", ""),
 ]
 _HELP_CARD = (
@@ -332,10 +333,10 @@ class TelegramNotifier:
             )
 
     async def send_distill(self, proposal: distill.Proposal) -> None:
-        """DM a brand.md proposal with ✅ Apply / ❌ Discard."""
+        """DM a brand-text proposal with ✅ Apply / ❌ Discard."""
         diff = proposal.diff
         if len(diff) > _DISTILL_DIFF_LIMIT:
-            diff = diff[:_DISTILL_DIFF_LIMIT] + "\n… (diff truncated; Apply writes the full file)"
+            diff = diff[:_DISTILL_DIFF_LIMIT] + "\n… (diff truncated; Apply writes the full text)"
         keyboard = {
             "inline_keyboard": [
                 [
@@ -505,6 +506,7 @@ def _card_or_chat(
     return _CardWriter(notifier, cb["message"]["message_id"], session, brand)
 
 
+_BRAND_SHOW_LIMIT = 3500  # inside Telegram's 4096-char cap, with the <pre> wrapper
 _DISTILL_DIFF_LIMIT = 3000  # keeps rationale + diff inside Telegram's 4096-char message cap
 _EDITABLE = (PostStatus.SUGGESTED, PostStatus.APPROVED)
 _TERMINAL_CB = {PostStatus.PUBLISHING, PostStatus.PUBLISHED, PostStatus.FAILED}
@@ -995,6 +997,16 @@ async def _cmd_distill(
         await notifier.send_distill(result)
 
 
+async def _cmd_brand(
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, args: str, settings: Settings
+) -> None:
+    text = brands.text(brand)
+    if len(text) > _BRAND_SHOW_LIMIT:
+        text = text[:_BRAND_SHOW_LIMIT] + "\n… (truncated; brand_sync.py pull gives the full text)"
+    body = f"<b>Brand text</b>\n<pre>{html_lib.escape(text)}</pre>"
+    await notifier.send_message(body, html=True)
+
+
 _HANDLERS: dict[str, Any] = {
     "/console": _cmd_console,
     "/home": _cmd_home,
@@ -1008,6 +1020,7 @@ _HANDLERS: dict[str, Any] = {
     "/schedule": _cmd_schedule,
     "/mode": _cmd_mode,
     "/distill": _cmd_distill,
+    "/brand": _cmd_brand,
     "/help": _cmd_help,
     "/start": _cmd_help,
 }
@@ -1134,7 +1147,7 @@ async def process_callback(
         _, _, rest = data.partition(":")
         action, _, token = rest.partition(":")
         if action == "apply":
-            label = distill.apply(token, settings)
+            label = await distill.apply(session, brand, token)
         elif action == "discard":
             label = distill.discard(token)
         else:
