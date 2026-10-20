@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import distill, llm
+from app import brands, distill, llm
 from app.config import Settings
 from app.models import Post, PostStatus
 from app.notifier.telegram import process_callback, process_message
@@ -19,6 +19,9 @@ _NEW = "# Brand\n\n## Voice\nPlayful, never preachy.\n"
 
 
 class _Notifier:
+    def for_brand(self, brand: object) -> _Notifier:
+        return self
+
     def __init__(self) -> None:
         self.messages: list[str] = []
         self.proposals: list[distill.Proposal] = []
@@ -64,6 +67,7 @@ def model_returns(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 async def _seed(session: AsyncSession) -> None:
     session.add(
         Post(
+            brand_id=1,
             image_ref="1.jpg",
             caption_he="אושר",
             caption_en="ok",
@@ -85,7 +89,7 @@ def _cb(data: str, chat: int = _OWNER) -> dict:
 async def test_nothing_to_learn_skips_the_model(
     session: AsyncSession, settings: Settings, model_returns: list[str]
 ) -> None:
-    result = await distill.propose(session, settings)
+    result = await distill.propose(session, settings, await brands.default(session))
     assert isinstance(result, str) and "Nothing to learn" in result
     assert model_returns == []
 
@@ -138,7 +142,7 @@ async def test_apply_refuses_when_brand_changed_since_proposal(
     session: AsyncSession, settings: Settings, model_returns: list[str]
 ) -> None:
     await _seed(session)
-    result = await distill.propose(session, settings)
+    result = await distill.propose(session, settings, await brands.default(session))
     assert isinstance(result, distill.Proposal)
     Path(settings.brand_file).write_text("edited by owner\n", encoding="utf-8")
     assert "changed since" in distill.apply(result.token, settings)
@@ -154,5 +158,5 @@ async def test_unchanged_brand_proposes_nothing(
         return BrandProposal(new_brand=brand, rationale="all good")
 
     monkeypatch.setattr(llm, "distill_brand", same)
-    result = await distill.propose(session, settings)
+    result = await distill.propose(session, settings, await brands.default(session))
     assert isinstance(result, str) and "No changes" in result and distill._PENDING == {}

@@ -79,15 +79,20 @@ _REPEATEDLY = 3
 _LIVE = (PostStatus.APPROVED, PostStatus.KEPT, PostStatus.PUBLISHING, PostStatus.PUBLISHED)
 
 
-async def build_context(session: AsyncSession, settings: Settings) -> LearningContext:
+async def build_context(
+    session: AsyncSession, brand_id: int, settings: Settings
+) -> LearningContext:
+    """The brand's own history only — every query filters on ``brand_id``."""
     if not settings.learning_enabled:
         return LearningContext()
 
-    edited_ids = select(Feedback.post_id).where(Feedback.edit_after.is_not(None))
+    post_mine = Post.brand_id == brand_id
+    fb_mine = Feedback.brand_id == brand_id
+    edited_ids = select(Feedback.post_id).where(fb_mine, Feedback.edit_after.is_not(None))
     # Edited posts first (the owner's corrected voice), then newest first.
     rows = await session.scalars(
         select(Post)
-        .where(Post.status.in_(_LIVE))
+        .where(post_mine, Post.status.in_(_LIVE))
         .order_by(Post.id.in_(edited_ids).desc(), Post.decided_at.desc(), Post.id.desc())
         .limit(settings.learning_examples)
     )
@@ -95,7 +100,9 @@ async def build_context(session: AsyncSession, settings: Settings) -> LearningCo
     edited = set(
         await session.scalars(
             select(Feedback.post_id).where(
-                Feedback.edit_after.is_not(None), Feedback.post_id.in_([p.id for p in posts])
+                fb_mine,
+                Feedback.edit_after.is_not(None),
+                Feedback.post_id.in_([p.id for p in posts]),
             )
         )
     )
@@ -106,7 +113,7 @@ async def build_context(session: AsyncSession, settings: Settings) -> LearningCo
 
     edit_rows = await session.scalars(
         select(Feedback)
-        .where(Feedback.edit_after.is_not(None))
+        .where(fb_mine, Feedback.edit_after.is_not(None))
         .order_by(Feedback.id.desc())
         .limit(settings.learning_examples)
     )
@@ -119,7 +126,7 @@ async def build_context(session: AsyncSession, settings: Settings) -> LearningCo
     pairs = await session.execute(
         select(parent.caption_he, Post.caption_he)
         .join(parent, Post.retry_of == parent.id)
-        .where(Post.status.in_(_LIVE))
+        .where(post_mine, Post.status.in_(_LIVE))
         .order_by(Post.id.desc())
         .limit(settings.learning_examples)
     )
@@ -132,6 +139,7 @@ async def build_context(session: AsyncSession, settings: Settings) -> LearningCo
         select(Post.caption_he, Feedback.reason)
         .join(Post, Feedback.post_id == Post.id)
         .where(
+            fb_mine,
             Feedback.decision == Decision.ALMOST,
             Feedback.created_at >= since,
             Post.status == PostStatus.REJECTED,
@@ -143,6 +151,7 @@ async def build_context(session: AsyncSession, settings: Settings) -> LearningCo
 
     reasons = await session.scalars(
         select(Feedback.reason).where(
+            fb_mine,
             Feedback.decision == Decision.REJECT,
             Feedback.reason.in_(list(_HINTS)),
             Feedback.created_at >= since,
@@ -153,7 +162,7 @@ async def build_context(session: AsyncSession, settings: Settings) -> LearningCo
     recent = list(
         await session.scalars(
             select(Post.caption_he)
-            .where(Post.status == PostStatus.PUBLISHED)
+            .where(post_mine, Post.status == PostStatus.PUBLISHED)
             .order_by(Post.published_at.desc(), Post.id.desc())
             .limit(settings.learning_recent)
         )
@@ -171,11 +180,13 @@ def _since(settings: Settings) -> datetime:
     return datetime.now(UTC) - timedelta(days=settings.learning_window_days)
 
 
-async def verdict_counts(session: AsyncSession, settings: Settings) -> dict[Decision, int]:
+async def verdict_counts(
+    session: AsyncSession, brand_id: int, settings: Settings
+) -> dict[Decision, int]:
     """Posts per decision in the learning window (a ✏️ Fix re-approve counts once)."""
     rows = await session.execute(
         select(Feedback.decision, func.count(func.distinct(Feedback.post_id)))
-        .where(Feedback.created_at >= _since(settings))
+        .where(Feedback.brand_id == brand_id, Feedback.created_at >= _since(settings))
         .group_by(Feedback.decision)
     )
     return {Decision(d): n for d, n in rows.tuples()}

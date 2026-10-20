@@ -14,7 +14,7 @@ from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import render
+from app import brands, render
 from app.config import Settings, get_settings
 from app.db import SessionLocal, get_session, init_db
 from app.models import Post, PostStatus
@@ -40,13 +40,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     check_prod_config(settings)
     if settings.is_dev:
         await init_db()
+    try:  # before load_schedule: it reads brand 1's prefs
+        async with SessionLocal() as session:
+            await brands.ensure_default(session, settings)
+    except Exception:  # load_schedule then fails closed (learning mode + the DM below)
+        logger.exception("Could not ensure the default brand.")
+    # The process-wide notifier addresses the env chat — only for the boot warning below.
     notifier = TelegramNotifier(settings)
     # Fail closed: unreadable settings → learning mode (slots paused, no catch-up) + a DM.
     schedule = await load_schedule(SessionLocal, settings)
     async with SessionLocal() as session:
-        await publish.recover_orphaned(session, notifier, settings)
-        if not schedule.degraded:
-            await publish.catch_up_missed_slot(session, settings)
+        tenants = await brands.all_brands(session)
+        for brand in tenants:
+            await publish.recover_orphaned(session, brand.id, notifier.for_brand(brand), settings)
+            if not schedule.degraded:
+                await publish.catch_up_missed_slot(session, brand.id, settings)
     scheduler = build_scheduler(SessionLocal, notifier, settings, schedule)
     notifier.scheduler = scheduler
     scheduler.start()
@@ -62,7 +70,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.scheduler = scheduler
     if not settings.is_dev and settings.telegram_webhook_base:
         await _set_webhook()
-        await notifier.set_my_commands()
+        for brand in tenants:
+            await notifier.for_brand(brand).set_my_commands()
     live = settings.publishing_live
     # warning-level so the publish mode is always visible in prod logs (root logger is
     # at WARNING there — app INFO is filtered). ponytail: elevate this one banner rather
@@ -135,6 +144,7 @@ def _post_summary(post: Post) -> dict[str, Any]:
         "id": post.id,
         "status": post.status,
         "queue_position": post.queue_position,
+        "brand_id": post.brand_id,
         "batch_id": post.batch_id,
         "decided_at": post.decided_at.isoformat() if post.decided_at else None,
         "published_at": post.published_at.isoformat() if post.published_at else None,
@@ -165,15 +175,16 @@ async def dev_generate(
     request: Request, session: AsyncSession = Depends(get_session)
 ) -> dict[str, Any]:
     _require_dev()
-    posts = await generate.generate_batch(session)
-    await review.send_for_review(posts, request.app.state.notifier)
+    brand = await brands.default(session)
+    posts = await generate.generate_batch(session, brand)
+    await review.send_for_review(posts, request.app.state.notifier.for_brand(brand))
     return {"generated": [_post_summary(p) for p in posts]}
 
 
 @app.post("/dev/publish-next")
 async def dev_publish_next(session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
     _require_dev()
-    post = await publish.publish_next(session)
+    post = await publish.publish_next(session, (await brands.default(session)).id)
     return {"published": _post_summary(post) if post else None}
 
 
@@ -181,13 +192,14 @@ async def dev_publish_next(session: AsyncSession = Depends(get_session)) -> dict
 async def dev_run_cycle(session: AsyncSession = Depends(get_session)) -> dict[str, Any]:
     """Generate → auto-approve → publish. One-shot dev cycle; never reachable in prod."""
     _require_dev()
-    posts = await generate.generate_batch(session)
+    brand = await brands.default(session)
+    posts = await generate.generate_batch(session, brand)
     generated = [_post_summary(p) for p in posts]
     for p in posts:
-        await review.handle_decision(session, p.id, "approve")
+        await review.handle_decision(session, brand.id, p.id, "approve")
     published: list[dict[str, Any]] = []
     while True:
-        post = await publish.publish_next(session)
+        post = await publish.publish_next(session, brand.id)
         if post is None:
             break
         published.append(_post_summary(post))

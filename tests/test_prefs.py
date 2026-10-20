@@ -29,6 +29,9 @@ _SETTINGS = Settings(
 
 
 class _Notifier:
+    def for_brand(self, brand: object) -> _Notifier:
+        return self
+
     def __init__(self, scheduler: sched.CuteScheduler | None = None) -> None:
         self.scheduler = scheduler
         self.messages: list[str] = []
@@ -70,7 +73,14 @@ async def _cmd(session: AsyncSession, n: _Notifier, text: str) -> None:
 
 
 async def _post(session: AsyncSession, status: PostStatus = PostStatus.SUGGESTED) -> Post:
-    p = Post(image_ref="a.jpg", caption_he="ה", caption_en="e", visual_concept="v", status=status)
+    p = Post(
+        brand_id=1,
+        image_ref="a.jpg",
+        caption_he="ה",
+        caption_en="e",
+        visual_concept="v",
+        status=status,
+    )
     session.add(p)
     await session.commit()
     return p
@@ -84,20 +94,20 @@ def _posting_jobs(s: sched.CuteScheduler) -> dict[str, Any]:
 
 
 async def test_prefs_fall_back_to_env_then_row_wins(session: AsyncSession) -> None:
-    assert await prefs.mode(session) == "live"
-    assert await prefs.generation_cron(session, _SETTINGS) == "0 9 * * *"
-    assert await prefs.posting_slots(session, _SETTINGS) == [(12, 0), (18, 0)]
-    await prefs.set(session, prefs.POSTING_SLOTS, "10:30")
-    await prefs.set(session, prefs.GENERATION_CRON, "0 7 * * *")
-    assert await prefs.posting_slots(session, _SETTINGS) == [(10, 30)]
-    assert await prefs.generation_cron(session, _SETTINGS) == "0 7 * * *"
-    await prefs.delete(session, prefs.POSTING_SLOTS)
-    assert await prefs.posting_slots(session, _SETTINGS) == [(12, 0), (18, 0)]
+    assert await prefs.mode(session, 1) == "live"
+    assert await prefs.generation_cron(session, 1, _SETTINGS) == "0 9 * * *"
+    assert await prefs.posting_slots(session, 1, _SETTINGS) == [(12, 0), (18, 0)]
+    await prefs.set(session, 1, prefs.POSTING_SLOTS, "10:30")
+    await prefs.set(session, 1, prefs.GENERATION_CRON, "0 7 * * *")
+    assert await prefs.posting_slots(session, 1, _SETTINGS) == [(10, 30)]
+    assert await prefs.generation_cron(session, 1, _SETTINGS) == "0 7 * * *"
+    await prefs.delete(session, 1, prefs.POSTING_SLOTS)
+    assert await prefs.posting_slots(session, 1, _SETTINGS) == [(12, 0), (18, 0)]
 
 
 async def test_garbage_mode_fails_closed(session: AsyncSession) -> None:
-    await prefs.set(session, prefs.MODE, "banana")
-    assert await prefs.mode(session) == "learning"
+    await prefs.set(session, 1, prefs.MODE, "banana")
+    assert await prefs.mode(session, 1) == "learning"
 
 
 _SEVEN = "00:00,01:00,02:00,03:00,04:00,05:00,06:00"
@@ -124,24 +134,28 @@ def test_parse_generation() -> None:
 
 
 async def test_learning_mode_turns_approve_into_keep(session: AsyncSession) -> None:
-    await prefs.set(session, prefs.MODE, "learning")
+    await prefs.set(session, 1, prefs.MODE, "learning")
     p = await _post(session)
-    out = await review.handle_decision(session, p.id, "approve")
+    out = await review.handle_decision(session, 1, p.id, "approve")
     assert out is not None and out.status == PostStatus.KEPT and out.queue_position is None
     fb = (await session.scalars(select(Feedback))).all()
     assert [f.decision for f in fb] == ["approve"]  # still an approval signal for learning
 
 
 async def test_learning_callback_toast_and_live_restores_approve(session: AsyncSession) -> None:
-    await prefs.set(session, prefs.MODE, "learning")
+    await prefs.set(session, 1, prefs.MODE, "learning")
     p = await _post(session)
     n = _Notifier()
-    cb = {"id": "c", "data": f"approve:{p.id}", "message": {"message_id": 1, "chat": {"id": 1}}}
+    cb = {
+        "id": "c",
+        "data": f"approve:{p.id}",
+        "message": {"message_id": 1, "chat": {"id": _OWNER}},
+    }
     await process_callback(session, n, cb, _SETTINGS)
     assert n.toasts == ["📚 Kept — learning mode"]
-    await prefs.set(session, prefs.MODE, "live")
+    await prefs.set(session, 1, prefs.MODE, "live")
     p2 = await _post(session)
-    out = await review.handle_decision(session, p2.id, "approve")
+    out = await review.handle_decision(session, 1, p2.id, "approve")
     assert out is not None and out.status == PostStatus.APPROVED
 
 
@@ -155,32 +169,32 @@ async def test_mode_command_pauses_and_resumes_slot_jobs(session: AsyncSession) 
         assert "Mode: <b>live</b>" in n.messages[-1]
         assert [b["callback_data"] for b in n.keyboards[-1][0]] == ["mode:learning", "mode:live"]
         await _cmd(session, n, "/mode learning")
-        assert await prefs.mode(session) == "learning"
+        assert await prefs.mode(session, 1) == "learning"
         assert all(j.next_run_time is None for j in _posting_jobs(s).values())
         await _cmd(session, n, "/mode live")
         assert all(j.next_run_time is not None for j in _posting_jobs(s).values())
         await _cmd(session, n, "/mode sideways")
         assert n.messages[-1].startswith("Usage")
-        assert await prefs.mode(session) == "live"
+        assert await prefs.mode(session, 1) == "live"
     finally:
         s.shutdown(wait=False)
 
 
 async def test_postnow_and_publish_refuse_in_learning_mode(session: AsyncSession) -> None:
     p = await _post(session)
-    await review.handle_decision(session, p.id, "approve")  # approved while live
-    await prefs.set(session, prefs.MODE, "learning")
+    await review.handle_decision(session, 1, p.id, "approve")  # approved while live
+    await prefs.set(session, 1, prefs.MODE, "learning")
     n = _Notifier()
     await _cmd(session, n, "/postnow")
     await _cmd(session, n, f"/postnow {p.id}")
     assert all("Learning mode" in m for m in n.messages) and len(n.messages) == 2
-    assert await publish.publish_next(session, [_Ok()]) is None  # slot tick / catch-up door
+    assert await publish.publish_next(session, 1, [_Ok()]) is None  # slot tick / catch-up door
     await session.refresh(p)
     assert p.status == PostStatus.APPROVED
 
 
 async def test_status_header_in_learning_mode(session: AsyncSession) -> None:
-    await prefs.set(session, prefs.MODE, "learning")
+    await prefs.set(session, 1, prefs.MODE, "learning")
     n = _Notifier()
     await _cmd(session, n, "/status")
     assert n.messages[0].startswith("🎓 <b>LEARNING MODE</b> — nothing publishes")
@@ -213,17 +227,17 @@ async def test_schedule_buttons_edit_slots(session: AsyncSession) -> None:
     await process_callback(session, n, _tap("sch:pick:add"), _SETTINGS)
     assert n.keyboards[-1][0][0]["callback_data"] == "sch:add:7"
     await process_callback(session, n, _tap("sch:add:14"), _SETTINGS)
-    assert await prefs.get(session, prefs.POSTING_SLOTS) == "12:00,14:00,18:00"
+    assert await prefs.get(session, 1, prefs.POSTING_SLOTS) == "12:00,14:00,18:00"
     await process_callback(session, n, _tap("sch:del:1200"), _SETTINGS)
     await process_callback(session, n, _tap("sch:del:1800"), _SETTINGS)
-    assert await prefs.get(session, prefs.POSTING_SLOTS) == "14:00"
+    assert await prefs.get(session, 1, prefs.POSTING_SLOTS) == "14:00"
     await process_callback(session, n, _tap("sch:del:1400"), _SETTINGS)
     assert n.toasts[-1] == "Keep at least one slot"
-    assert await prefs.get(session, prefs.POSTING_SLOTS) == "14:00"
+    assert await prefs.get(session, 1, prefs.POSTING_SLOTS) == "14:00"
     await process_callback(session, n, _tap("sch:gen:7"), _SETTINGS)
-    assert await prefs.get(session, prefs.GENERATION_CRON) == "0 7 * * *"
+    assert await prefs.get(session, 1, prefs.GENERATION_CRON) == "0 7 * * *"
     await process_callback(session, n, _tap("sch:reset"), _SETTINGS)
-    assert await prefs.get(session, prefs.POSTING_SLOTS) is None
+    assert await prefs.get(session, 1, prefs.POSTING_SLOTS) is None
     assert "post: 12:00,18:00" in n.messages[-1]
 
 
@@ -238,16 +252,16 @@ async def test_schedule_post_generate_reset(session: AsyncSession) -> None:
         n = _Notifier(s)
         await _cmd(session, n, "/schedule post 10:00")
         assert set(_posting_jobs(s)) == {"posting-1000"}
-        assert await prefs.get(session, prefs.POSTING_SLOTS) == "10:00"
+        assert await prefs.get(session, 1, prefs.POSTING_SLOTS) == "10:00"
 
         await _cmd(session, n, "/schedule generate 07:15")
         assert str(s.get_job("generation").trigger).startswith("cron[")
-        assert await prefs.get(session, prefs.GENERATION_CRON) == "15 7 * * *"
+        assert await prefs.get(session, 1, prefs.GENERATION_CRON) == "15 7 * * *"
 
-        before = await prefs.get(session, prefs.POSTING_SLOTS)
+        before = await prefs.get(session, 1, prefs.POSTING_SLOTS)
         await _cmd(session, n, "/schedule post 99:00")
         assert n.messages[-1].count("Usage") == 1
-        assert await prefs.get(session, prefs.POSTING_SLOTS) == before  # nothing stored
+        assert await prefs.get(session, 1, prefs.POSTING_SLOTS) == before  # nothing stored
 
         await _cmd(session, n, "/schedule reset")
         assert set(_posting_jobs(s)) == {"posting-1200", "posting-1800"}
@@ -257,7 +271,7 @@ async def test_schedule_post_generate_reset(session: AsyncSession) -> None:
 
 
 async def test_schedule_post_in_learning_mode_stays_paused(session: AsyncSession) -> None:
-    await prefs.set(session, prefs.MODE, "learning")
+    await prefs.set(session, 1, prefs.MODE, "learning")
     s = _scheduler()
     s.start(paused=True)
     try:
@@ -269,10 +283,10 @@ async def test_schedule_post_in_learning_mode_stays_paused(session: AsyncSession
 
 async def test_catch_up_uses_stored_slots(session: AsyncSession) -> None:
     p = await _post(session)
-    await review.handle_decision(session, p.id, "approve")
-    await prefs.set(session, prefs.POSTING_SLOTS, "09:00")  # env says 12:00/18:00
+    await review.handle_decision(session, 1, p.id, "approve")
+    await prefs.set(session, 1, prefs.POSTING_SLOTS, "09:00")  # env says 12:00/18:00
     now = datetime(2026, 1, 5, 9, 30, tzinfo=UTC)
-    out = await publish.catch_up_missed_slot(session, _SETTINGS, now=now, publishers=[_Ok()])
+    out = await publish.catch_up_missed_slot(session, 1, _SETTINGS, now=now, publishers=[_Ok()])
     assert out is not None and out.status == PostStatus.PUBLISHED
 
 
@@ -280,7 +294,7 @@ async def test_catch_up_uses_stored_slots(session: AsyncSession) -> None:
 
 
 async def test_load_schedule_applies_stored_mode(session: AsyncSession) -> None:
-    await prefs.set(session, prefs.MODE, "learning")
+    await prefs.set(session, 1, prefs.MODE, "learning")
     sm = async_sessionmaker(session.bind, expire_on_commit=False)
     loaded = await sched.load_schedule(sm, _SETTINGS)
     assert loaded.mode == "learning" and not loaded.degraded

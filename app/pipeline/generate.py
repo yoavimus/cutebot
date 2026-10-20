@@ -11,30 +11,34 @@ import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import learning, llm, stock
-from app.brand import load_brand
+from app import brands, learning, llm, stock
 from app.config import get_settings
 from app.llm import CaptionError
-from app.models import Batch, Post, PostStatus
+from app.models import Batch, Brand, Post, PostStatus
 
 logger = logging.getLogger(__name__)
 
 
 async def generate_batch(
     session: AsyncSession,
+    brand: Brand,
     *,
     n: int | None = None,
-    brand: str | None = None,
 ) -> list[Post]:
-    """Generate and store a batch of suggestions. Returns the created posts."""
+    """Generate and store a batch of suggestions for ``brand``. Returns the created posts.
+
+    Per-post LiteLLM usage rides on each suggestion (``s.tokens_in`` / ``s.tokens_out``)
+    inside the loop below — that is where M10.3 stores tokens and cost.
+    """
     settings = get_settings()
     size = n or settings.batch_size
-    brand_text = brand if brand is not None else load_brand()
+    brand_text = brands.text(brand)
 
-    context = await learning.build_context(session, settings)
-    images = await stock.select_images(session, size, settings)
+    context = await learning.build_context(session, brand.id, settings)
+    images = await stock.select_images(session, brand, size, settings)
 
     batch = Batch(
+        brand_id=brand.id,
         model=settings.default_llm_model,
         size=len(images),
         brand_snapshot=brand_text,
@@ -52,6 +56,7 @@ async def generate_batch(
             continue
         ref = str(image.relative_to(stock_dir)) if image.is_relative_to(stock_dir) else str(image)
         post = Post(
+            brand_id=brand.id,
             image_ref=ref,
             caption_he=s.caption_he,
             caption_en=s.caption_en,

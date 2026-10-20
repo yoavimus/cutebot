@@ -28,7 +28,7 @@ import random
 import time
 from pathlib import Path
 
-from app import learning, llm, stock
+from app import brands, learning, llm, stock
 from app.brand import load_brand
 from app.config import get_settings
 
@@ -55,7 +55,7 @@ def post_cost(model: str, tokens_in: int | None, tokens_out: int | None) -> floa
 async def run(models: list[str], n_images: int, out: str, use_learning: bool = False) -> None:
     settings = get_settings()
     brand = load_brand()
-    images = stock.list_images(settings)
+    images = stock.list_images(settings, "")  # brand 1 stock; the eval compares models, not brands
     if not images:
         raise SystemExit(f"No stock images in {settings.stock_images_dir!r} — nothing to caption.")
     sample = random.sample(images, min(n_images, len(images)))
@@ -64,7 +64,7 @@ async def run(models: list[str], n_images: int, out: str, use_learning: bool = F
         from app.db import SessionLocal
 
         async with SessionLocal() as session:
-            context = await learning.build_context(session, settings)
+            context = await learning.build_context(session, brands.DEFAULT_ID, settings)
 
     lines = [
         "# Model eval — Hebrew quality gate",

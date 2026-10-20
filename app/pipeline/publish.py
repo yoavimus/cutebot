@@ -65,13 +65,18 @@ async def _recover_one(
     post.status = PostStatus.APPROVED  # Graph was never called; safe to reset
 
 
-async def recover_orphaned(session: AsyncSession, notifier: Notifier, settings: Settings) -> int:
-    """Resolve any PUBLISHING posts left over from a crash/restart.
+async def recover_orphaned(
+    session: AsyncSession, brand_id: int, notifier: Notifier, settings: Settings
+) -> int:
+    """Resolve the brand's PUBLISHING posts left over from a crash/restart.
 
-    ponytail: startup sweep; add per-post leases only if v1 ever goes multi-worker.
+    ``notifier`` is addressed to this brand. ponytail: startup sweep; add per-post leases
+    only if v1 ever goes multi-worker.
     """
     posts = (
-        await session.scalars(select(Post).where(Post.status == PostStatus.PUBLISHING))
+        await session.scalars(
+            select(Post).where(Post.brand_id == brand_id, Post.status == PostStatus.PUBLISHING)
+        )
     ).all()
     for post in posts:
         await _recover_one(session, notifier, settings, post)
@@ -116,13 +121,14 @@ async def _do_publish(
 
 async def publish_next(
     session: AsyncSession,
+    brand_id: int,
     publishers: list[Publisher] | None = None,
 ) -> Post | None:
-    """Publish the next approved post to all networks. Returns the post, or None if empty."""
-    if await prefs.mode(session) == prefs.LEARNING:
+    """Publish the brand's next approved post to all networks. None if the queue is empty."""
+    if await prefs.mode(session, brand_id) == prefs.LEARNING:
         logger.info("Learning mode — nothing publishes.")
         return None
-    post = await queue.peek_next(session)
+    post = await queue.peek_next(session, brand_id)
     if post is None:
         logger.info("Posting slot fired but the queue is empty — nothing to publish.")
         return None
@@ -131,6 +137,7 @@ async def publish_next(
 
 async def catch_up_missed_slot(
     session: AsyncSession,
+    brand_id: int,
     settings: Settings,
     *,
     now: datetime | None = None,
@@ -143,7 +150,7 @@ async def catch_up_missed_slot(
     recent slot fired within ``CATCHUP_WINDOW_MIN`` and nothing was published since,
     drain one post now. ponytail: startup check, not a persistent jobstore.
     """
-    slots = await prefs.posting_slots(session, settings)
+    slots = await prefs.posting_slots(session, brand_id, settings)
     if not slots:
         return None
     tz = ZoneInfo(settings.schedule_tz)
@@ -158,7 +165,9 @@ async def catch_up_missed_slot(
     if now - last_slot > timedelta(minutes=settings.catchup_window_min):
         return None
 
-    last_published = await session.scalar(select(func.max(Post.published_at)))
+    last_published = await session.scalar(
+        select(func.max(Post.published_at)).where(Post.brand_id == brand_id)
+    )
     if last_published is not None:
         if last_published.tzinfo is None:  # SQLite returns naive datetimes; stored as UTC
             last_published = last_published.replace(tzinfo=UTC)
@@ -166,19 +175,23 @@ async def catch_up_missed_slot(
             return None
 
     logger.info("Posting slot at %s was missed (restart?) — catching up.", last_slot)
-    return await publish_next(session, publishers)
+    return await publish_next(session, brand_id, publishers)
 
 
 async def publish_by_id(
     session: AsyncSession,
+    brand_id: int,
     post_id: int,
     publishers: list[Publisher] | None = None,
 ) -> Post | None:
-    """Publish a specific approved post by ID. Returns post unchanged (not None) if not APPROVED."""
+    """Publish a specific approved post by ID. Returns post unchanged (not None) if not
+    APPROVED; None if it doesn't exist or belongs to another brand."""
     post = await session.get(Post, post_id)
-    if post is None or post.status != PostStatus.APPROVED:
+    if post is None or post.brand_id != brand_id:
+        return None
+    if post.status != PostStatus.APPROVED:
         return post
-    if await prefs.mode(session) == prefs.LEARNING:
+    if await prefs.mode(session, brand_id) == prefs.LEARNING:
         logger.info("Learning mode — post %s not published.", post_id)
         return post
     return await _do_publish(session, post, publishers)

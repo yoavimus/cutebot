@@ -8,9 +8,9 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import llm, stock
+from app import brands, llm, stock
 from app.config import Settings
-from app.models import BannedImage, Feedback, Post, PostStatus
+from app.models import BannedImage, Brand, Feedback, Post, PostStatus
 from app.notifier.telegram import process_callback, process_message
 from app.pipeline import generate, review
 from app.schemas import PostSuggestion
@@ -18,6 +18,9 @@ from app.schemas import PostSuggestion
 
 class _FakeNotifier:
     scheduler = None
+
+    def for_brand(self, brand: object) -> _FakeNotifier:
+        return self
 
     def __init__(self) -> None:
         self.marks: list[tuple[dict, Post]] = []
@@ -73,7 +76,7 @@ def _photo_cb(post_id: int, decision: str) -> dict:
         "data": f"{decision}:{post_id}",
         "message": {
             "message_id": 10,
-            "chat": {"id": 99},
+            "chat": {"id": 42},
             "photo": [{"file_id": "x"}],
             "caption": "original caption",
         },
@@ -86,7 +89,7 @@ def _text_cb(post_id: int, decision: str) -> dict:
         "data": f"{decision}:{post_id}",
         "message": {
             "message_id": 11,
-            "chat": {"id": 99},
+            "chat": {"id": 42},
             "text": "original text",
         },
     }
@@ -98,7 +101,7 @@ def _reason_cb(post_id: int, reason: str) -> dict:
         "data": f"reason:{post_id}:{reason}",
         "message": {
             "message_id": 11,
-            "chat": {"id": 99},
+            "chat": {"id": 42},
             "text": "original text\n\nWhy reject?",
         },
     }
@@ -134,7 +137,9 @@ def _stub_llm(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def _stub_stock(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_select(session: AsyncSession, n: int, settings: Settings) -> list[Path]:
+    async def fake_select(
+        session: AsyncSession, brand: Brand, n: int, settings: Settings
+    ) -> list[Path]:
         return [Path(f"{i}.jpg") for i in range(n)]
 
     monkeypatch.setattr(stock, "select_images", fake_select)
@@ -144,7 +149,7 @@ def _stub_stock(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def test_fresh_approve(session: AsyncSession) -> None:
-    posts = await generate.generate_batch(session, n=1, brand="b")
+    posts = await generate.generate_batch(session, await brands.default(session), n=1)
     notifier = _FakeNotifier()
     await process_callback(session, notifier, _photo_cb(posts[0].id, "approve"))
     assert notifier.toasts[0][1] == "✅ Approved"
@@ -153,7 +158,7 @@ async def test_fresh_approve(session: AsyncSession) -> None:
 
 
 async def test_double_tap_already(session: AsyncSession) -> None:
-    posts = await generate.generate_batch(session, n=1, brand="b")
+    posts = await generate.generate_batch(session, await brands.default(session), n=1)
     notifier = _FakeNotifier()
     await process_callback(session, notifier, _photo_cb(posts[0].id, "approve"))
     await process_callback(session, notifier, _photo_cb(posts[0].id, "approve"))
@@ -171,7 +176,7 @@ async def test_unknown_post(session: AsyncSession) -> None:
 
 async def test_mark_decided_uses_caption_for_photo(session: AsyncSession) -> None:
     """process_callback picks editMessageCaption path for photo messages."""
-    posts = await generate.generate_batch(session, n=1, brand="b")
+    posts = await generate.generate_batch(session, await brands.default(session), n=1)
     notifier = _FakeNotifier()
     cb = _photo_cb(posts[0].id, "approve")
     await process_callback(session, notifier, cb)
@@ -183,7 +188,7 @@ async def test_mark_decided_uses_caption_for_photo(session: AsyncSession) -> Non
 
 async def test_reject_shows_reason_picker(session: AsyncSession) -> None:
     """❌ tap → reason picker, no DB change yet."""
-    posts = await generate.generate_batch(session, n=1, brand="b")
+    posts = await generate.generate_batch(session, await brands.default(session), n=1)
     notifier = _FakeNotifier()
     await process_callback(session, notifier, _photo_cb(posts[0].id, "reject"))
     assert notifier.toasts[0][1] == "Why reject?"
@@ -196,7 +201,7 @@ async def test_reject_shows_reason_picker(session: AsyncSession) -> None:
 
 async def test_fresh_reject_with_reason(session: AsyncSession) -> None:
     """Two-step reject: ❌ → reason chip → REJECTED with reason."""
-    posts = await generate.generate_batch(session, n=1, brand="b")
+    posts = await generate.generate_batch(session, await brands.default(session), n=1)
     notifier = _FakeNotifier()
     await process_callback(session, notifier, _photo_cb(posts[0].id, "reject"))
     await process_callback(session, notifier, _reason_cb(posts[0].id, "voice"))
@@ -207,7 +212,7 @@ async def test_fresh_reject_with_reason(session: AsyncSession) -> None:
 
 async def test_fresh_reject_skip(session: AsyncSession) -> None:
     """Skip reason → REJECTED, no reason suffix in toast."""
-    posts = await generate.generate_batch(session, n=1, brand="b")
+    posts = await generate.generate_batch(session, await brands.default(session), n=1)
     notifier = _FakeNotifier()
     await process_callback(session, notifier, _text_cb(posts[0].id, "reject"))
     await process_callback(session, notifier, _reason_cb(posts[0].id, "skip"))
@@ -216,7 +221,7 @@ async def test_fresh_reject_skip(session: AsyncSession) -> None:
 
 
 async def test_mark_decided_uses_text_for_text_message(session: AsyncSession) -> None:
-    posts = await generate.generate_batch(session, n=1, brand="b")
+    posts = await generate.generate_batch(session, await brands.default(session), n=1)
     notifier = _FakeNotifier()
     await process_callback(session, notifier, _text_cb(posts[0].id, "reject"))
     await process_callback(session, notifier, _reason_cb(posts[0].id, "skip"))
@@ -225,7 +230,7 @@ async def test_mark_decided_uses_text_for_text_message(session: AsyncSession) ->
 
 
 async def test_flip_approve_to_reject_callback(session: AsyncSession) -> None:
-    posts = await generate.generate_batch(session, n=1, brand="b")
+    posts = await generate.generate_batch(session, await brands.default(session), n=1)
     notifier = _FakeNotifier()
     await process_callback(session, notifier, _photo_cb(posts[0].id, "approve"))
     await process_callback(session, notifier, _photo_cb(posts[0].id, "reject"))
@@ -236,7 +241,7 @@ async def test_flip_approve_to_reject_callback(session: AsyncSession) -> None:
 
 
 async def test_flip_reject_to_approve_callback(session: AsyncSession) -> None:
-    posts = await generate.generate_batch(session, n=1, brand="b")
+    posts = await generate.generate_batch(session, await brands.default(session), n=1)
     notifier = _FakeNotifier()
     await process_callback(session, notifier, _photo_cb(posts[0].id, "reject"))
     await process_callback(session, notifier, _reason_cb(posts[0].id, "boring"))
@@ -247,7 +252,7 @@ async def test_flip_reject_to_approve_callback(session: AsyncSession) -> None:
 
 
 async def test_published_post_cannot_be_flipped_callback(session: AsyncSession) -> None:
-    posts = await generate.generate_batch(session, n=1, brand="b")
+    posts = await generate.generate_batch(session, await brands.default(session), n=1)
     await session.refresh(posts[0])
     posts[0].status = PostStatus.PUBLISHED
     await session.commit()
@@ -259,19 +264,19 @@ async def test_published_post_cannot_be_flipped_callback(session: AsyncSession) 
 
 async def test_ban_image_reason_bans_the_photo(session: AsyncSession) -> None:
     """🚫 Ban image chip → REJECTED with reason + the image is excluded from future picks."""
-    posts = await generate.generate_batch(session, n=1, brand="b")
+    posts = await generate.generate_batch(session, await brands.default(session), n=1)
     notifier = _FakeNotifier()
     await process_callback(session, notifier, _reason_cb(posts[0].id, "ban_image"))
     assert posts[0].status == PostStatus.REJECTED
     assert "banned" in notifier.toasts[0][1]
-    assert await session.get(BannedImage, posts[0].image_ref) is not None
+    assert await session.get(BannedImage, (1, posts[0].image_ref)) is not None
 
 
 # ─────────────────────────────── /status command ─────────────────────────────
 
 
 async def test_status_owner_gets_summary(session: AsyncSession) -> None:
-    await generate.generate_batch(session, n=2, brand="b")
+    await generate.generate_batch(session, await brands.default(session), n=2)
     notifier = _FakeNotifier()
     await process_message(session, notifier, _msg(_OWNER_ID, "/status"), _OWNER_SETTINGS)
     assert len(notifier.messages) == 1
@@ -280,7 +285,7 @@ async def test_status_owner_gets_summary(session: AsyncSession) -> None:
 
 
 async def test_status_non_owner_refused(session: AsyncSession) -> None:
-    await generate.generate_batch(session, n=1, brand="b")
+    await generate.generate_batch(session, await brands.default(session), n=1)
     notifier = _FakeNotifier()
     await process_message(session, notifier, _msg(999, "/status"), _OWNER_SETTINGS)
     assert notifier.messages == []
@@ -394,7 +399,7 @@ async def test_send_message_html_rejected_resends_plain(fake_http: type[_FakeHtt
 async def test_stock_command_and_unban(session: AsyncSession, tmp_path: Path) -> None:
     (tmp_path / "a.jpg").write_bytes(b"\xff\xd8\xff")
     settings = _OWNER_SETTINGS.model_copy(update={"stock_images_dir": str(tmp_path)})
-    await stock.ban_image(session, "a.jpg")
+    await stock.ban_image(session, 1, "a.jpg")
     await session.commit()
 
     notifier = _FakeNotifier()
@@ -435,9 +440,9 @@ async def test_cmd_generate_is_capped(session: AsyncSession) -> None:
 
 
 async def test_cmd_queue_shows_ten_rows_then_more(session: AsyncSession) -> None:
-    posts = await generate.generate_batch(session, n=12, brand="b")
+    posts = await generate.generate_batch(session, await brands.default(session), n=12)
     for p in posts:
-        await review.handle_decision(session, p.id, "approve")
+        await review.handle_decision(session, 1, p.id, "approve")
     notifier = _FakeNotifier()
     await process_message(session, notifier, _msg(_OWNER_ID, "/queue"), _OWNER_SETTINGS)
     assert "(12 post(s))" in notifier.messages[0] and "+2 more" in notifier.messages[0]
@@ -451,8 +456,8 @@ async def test_cmd_queue_empty(session: AsyncSession) -> None:
 
 
 async def test_cmd_queue_with_posts(session: AsyncSession) -> None:
-    posts = await generate.generate_batch(session, n=1, brand="b")
-    await review.handle_decision(session, posts[0].id, "approve")
+    posts = await generate.generate_batch(session, await brands.default(session), n=1)
+    await review.handle_decision(session, 1, posts[0].id, "approve")
     notifier = _FakeNotifier()
     await process_message(session, notifier, _msg(_OWNER_ID, "/queue"), _OWNER_SETTINGS)
     assert f"#{posts[0].id}" in notifier.messages[0]
@@ -463,10 +468,10 @@ async def test_cmd_queue_with_posts(session: AsyncSession) -> None:
 
 
 async def test_cmd_queue_escapes_caption_html(session: AsyncSession) -> None:
-    posts = await generate.generate_batch(session, n=1, brand="b")
+    posts = await generate.generate_batch(session, await brands.default(session), n=1)
     posts[0].caption_he = "a <b> & c"
     await session.commit()
-    await review.handle_decision(session, posts[0].id, "approve")
+    await review.handle_decision(session, 1, posts[0].id, "approve")
     notifier = _FakeNotifier()
     await process_message(session, notifier, _msg(_OWNER_ID, "/queue"), _OWNER_SETTINGS)
     assert "a &lt;b&gt; &amp; c" in notifier.messages[0]
@@ -478,8 +483,8 @@ def _owner_cb(data: str) -> dict:
 
 
 async def test_drop_callback_rejects_queued_post(session: AsyncSession) -> None:
-    posts = await generate.generate_batch(session, n=1, brand="b")
-    await review.handle_decision(session, posts[0].id, "approve")
+    posts = await generate.generate_batch(session, await brands.default(session), n=1)
+    await review.handle_decision(session, 1, posts[0].id, "approve")
     n = _FakeNotifier()
     await process_callback(session, n, _owner_cb(f"drop:{posts[0].id}"), _OWNER_SETTINGS)
     await session.refresh(posts[0])
@@ -503,8 +508,8 @@ async def test_postnow_callback_routes_to_publish(
         return post
 
     monkeypatch.setattr(publish, "publish_by_id", fake_publish)
-    posts = await generate.generate_batch(session, n=1, brand="b")
-    await review.handle_decision(session, posts[0].id, "approve")
+    posts = await generate.generate_batch(session, await brands.default(session), n=1)
+    await review.handle_decision(session, 1, posts[0].id, "approve")
     n = _FakeNotifier()
     await process_callback(session, n, _owner_cb(f"postnow:{posts[0].id}"), _OWNER_SETTINGS)
     assert seen == [posts[0].id]
@@ -512,9 +517,9 @@ async def test_postnow_callback_routes_to_publish(
 
 
 async def test_unban_callback_and_long_ref_falls_back_to_text(session: AsyncSession) -> None:
-    await stock.ban_image(session, "a.jpg")
+    await stock.ban_image(session, 1, "a.jpg")
     long_ref = "x" * 70 + ".jpg"
-    await stock.ban_image(session, long_ref)
+    await stock.ban_image(session, 1, long_ref)
     await session.commit()
     n = _FakeNotifier()
     await process_message(session, n, _msg(_OWNER_ID, "/stock"), _OWNER_SETTINGS)
@@ -523,7 +528,7 @@ async def test_unban_callback_and_long_ref_falls_back_to_text(session: AsyncSess
 
     await process_callback(session, n, _owner_cb("unban:a.jpg"), _OWNER_SETTINGS)
     assert n.toasts[-1][1] == "♻️ Back in the pool"
-    assert await session.get(BannedImage, "a.jpg") is None
+    assert await session.get(BannedImage, (1, "a.jpg")) is None
 
 
 async def test_mode_callbacks_confirm_and_cancel(session: AsyncSession) -> None:
@@ -531,9 +536,9 @@ async def test_mode_callbacks_confirm_and_cancel(session: AsyncSession) -> None:
 
     n = _FakeNotifier()
     await process_callback(session, n, _owner_cb("mode:cancel"), _OWNER_SETTINGS)
-    assert await prefs.mode(session) == prefs.LIVE
+    assert await prefs.mode(session, 1) == prefs.LIVE
     await process_callback(session, n, _owner_cb("mode:learning"), _OWNER_SETTINGS)
-    assert await prefs.mode(session) == prefs.LEARNING
+    assert await prefs.mode(session, 1) == prefs.LEARNING
     assert "Learning mode" in n.messages[-1]
 
 
@@ -543,7 +548,7 @@ async def test_console_callbacks_ignore_non_owner(session: AsyncSession) -> None
     n = _FakeNotifier()
     cb = {"id": "c", "data": "mode:learning", "message": {"message_id": 1, "chat": {"id": 999}}}
     await process_callback(session, n, cb, _OWNER_SETTINGS)
-    assert await prefs.mode(session) == prefs.LIVE and n.toasts == []
+    assert await prefs.mode(session, 1) == prefs.LIVE and n.toasts == []
 
 
 async def test_console_card_sends_pins_and_edits_in_place(
@@ -599,7 +604,7 @@ async def test_console_card_sends_pins_and_edits_in_place(
 
 
 async def test_cmd_requeue(session: AsyncSession) -> None:
-    posts = await generate.generate_batch(session, n=1, brand="b")
+    posts = await generate.generate_batch(session, await brands.default(session), n=1)
     posts[0].status = PostStatus.FAILED
     await session.commit()
     notifier = _FakeNotifier()
@@ -611,7 +616,7 @@ async def test_cmd_requeue(session: AsyncSession) -> None:
 
 
 async def test_cmd_requeue_not_failed(session: AsyncSession) -> None:
-    posts = await generate.generate_batch(session, n=1, brand="b")
+    posts = await generate.generate_batch(session, await brands.default(session), n=1)
     notifier = _FakeNotifier()
     cmd = _msg(_OWNER_ID, f"/requeue {posts[0].id}")
     await process_message(session, notifier, cmd, _OWNER_SETTINGS)
@@ -628,7 +633,7 @@ async def test_cmd_pending_no_pending(session: AsyncSession) -> None:
 
 
 async def test_cmd_pending_lists_and_offers_resend(session: AsyncSession) -> None:
-    posts = await generate.generate_batch(session, n=2, brand="b")
+    posts = await generate.generate_batch(session, await brands.default(session), n=2)
     notifier = _FakeNotifier()
     await process_message(session, notifier, _msg(_OWNER_ID, "/pending"), _OWNER_SETTINGS)
     assert "2 pending" in notifier.messages[0] and f"#{posts[-1].id}" in notifier.messages[0]
@@ -638,7 +643,7 @@ async def test_cmd_pending_lists_and_offers_resend(session: AsyncSession) -> Non
 
 
 async def test_pending_resend_button_sends_only_latest_five(session: AsyncSession) -> None:
-    posts = await generate.generate_batch(session, n=7, brand="b")
+    posts = await generate.generate_batch(session, await brands.default(session), n=7)
     notifier = _FakeNotifier()
     await process_callback(session, notifier, _owner_cb("pend:resend"), _OWNER_SETTINGS)
     assert notifier.messages[0].startswith("⏳ Resending")
@@ -663,7 +668,7 @@ async def test_home_has_no_dry_run_line_when_live(session: AsyncSession) -> None
             "instagram_ig_user_id": "1",
         }
     )
-    text = await _build_home(session, _FakeNotifier(), live)  # type: ignore[arg-type]
+    text = await _build_home(session, _FakeNotifier(), await brands.default(session), live)  # type: ignore[arg-type]
     assert "DRY-RUN" not in text and "🚀" in text and "updated" in text
 
 
@@ -688,7 +693,7 @@ async def _feedback(session: AsyncSession, post_id: int) -> list[Feedback]:
 
 
 async def test_fix_button_prompts_for_edit(session: AsyncSession) -> None:
-    posts = await generate.generate_batch(session, n=1, brand="b")
+    posts = await generate.generate_batch(session, await brands.default(session), n=1)
     notifier = _FakeNotifier()
     await process_callback(session, notifier, _photo_cb(posts[0].id, "fix"))
     assert notifier.edit_prompts == [(_photo_cb(0, "x")["message"], posts[0].id)]
@@ -696,7 +701,7 @@ async def test_fix_button_prompts_for_edit(session: AsyncSession) -> None:
 
 
 async def test_fix_button_refused_when_published(session: AsyncSession) -> None:
-    posts = await generate.generate_batch(session, n=1, brand="b")
+    posts = await generate.generate_batch(session, await brands.default(session), n=1)
     posts[0].status = PostStatus.PUBLISHED
     await session.commit()
     notifier = _FakeNotifier()
@@ -706,7 +711,7 @@ async def test_fix_button_refused_when_published(session: AsyncSession) -> None:
 
 
 async def test_he_reply_approves_suggested_with_delta(session: AsyncSession) -> None:
-    post = (await generate.generate_batch(session, n=1, brand="b"))[0]
+    post = (await generate.generate_batch(session, await brands.default(session), n=1))[0]
     old_he, old_en = post.caption_he, post.caption_en
     notifier = _FakeNotifier()
     await process_message(session, notifier, _fix_reply(post.id, "כיתוב מתוקן"), _OWNER_SETTINGS)
@@ -724,7 +729,7 @@ async def test_he_reply_approves_suggested_with_delta(session: AsyncSession) -> 
 
 
 async def test_en_prefix_fixes_english(session: AsyncSession) -> None:
-    post = (await generate.generate_batch(session, n=1, brand="b"))[0]
+    post = (await generate.generate_batch(session, await brands.default(session), n=1))[0]
     old_he = post.caption_he
     await process_message(
         session, _FakeNotifier(), _fix_reply(post.id, "EN: better caption"), _OWNER_SETTINGS
@@ -736,8 +741,8 @@ async def test_en_prefix_fixes_english(session: AsyncSession) -> None:
 
 
 async def test_edit_of_approved_keeps_queue_position(session: AsyncSession) -> None:
-    post = (await generate.generate_batch(session, n=1, brand="b"))[0]
-    await review.handle_decision(session, post.id, "approve")
+    post = (await generate.generate_batch(session, await brands.default(session), n=1))[0]
+    await review.handle_decision(session, 1, post.id, "approve")
     await session.refresh(post)
     pos = post.queue_position
     await process_message(session, _FakeNotifier(), _fix_reply(post.id, "תיקון"), _OWNER_SETTINGS)
@@ -749,7 +754,7 @@ async def test_edit_of_approved_keeps_queue_position(session: AsyncSession) -> N
 
 async def test_edit_refused_for_published_and_rejected(session: AsyncSession) -> None:
     for status in (PostStatus.PUBLISHED, PostStatus.REJECTED):
-        post = (await generate.generate_batch(session, n=1, brand="b"))[0]
+        post = (await generate.generate_batch(session, await brands.default(session), n=1))[0]
         old = post.caption_he
         post.status = status
         await session.commit()
@@ -762,7 +767,7 @@ async def test_edit_refused_for_published_and_rejected(session: AsyncSession) ->
 
 
 async def test_unchanged_and_empty_edit_are_noops(session: AsyncSession) -> None:
-    post = (await generate.generate_batch(session, n=1, brand="b"))[0]
+    post = (await generate.generate_batch(session, await brands.default(session), n=1))[0]
     notifier = _FakeNotifier()
     await process_message(session, notifier, _fix_reply(post.id, post.caption_he), _OWNER_SETTINGS)
     await process_message(session, notifier, _fix_reply(post.id, "en:"), _OWNER_SETTINGS)
@@ -772,7 +777,7 @@ async def test_unchanged_and_empty_edit_are_noops(session: AsyncSession) -> None
 
 
 async def test_edit_from_non_owner_or_non_bot_prompt_ignored(session: AsyncSession) -> None:
-    post = (await generate.generate_batch(session, n=1, brand="b"))[0]
+    post = (await generate.generate_batch(session, await brands.default(session), n=1))[0]
     notifier = _FakeNotifier()
     await process_message(session, notifier, _fix_reply(post.id, "x", chat_id=999), _OWNER_SETTINGS)
     await process_message(
@@ -784,7 +789,7 @@ async def test_edit_from_non_owner_or_non_bot_prompt_ignored(session: AsyncSessi
 
 
 async def test_status_shows_learning_counts(session: AsyncSession) -> None:
-    post = (await generate.generate_batch(session, n=1, brand="b"))[0]
+    post = (await generate.generate_batch(session, await brands.default(session), n=1))[0]
     await process_message(session, _FakeNotifier(), _fix_reply(post.id, "תיקון"), _OWNER_SETTINGS)
     notifier = _FakeNotifier()
     await process_message(session, notifier, _msg(_OWNER_ID, "/status"), _OWNER_SETTINGS)
@@ -810,7 +815,7 @@ async def test_reply_to_photo_card_is_not_an_edit(session: AsyncSession) -> None
 
 
 async def test_keep_callback_keeps_and_stays_off_queue(session: AsyncSession) -> None:
-    post = (await generate.generate_batch(session, n=1, brand="b"))[0]
+    post = (await generate.generate_batch(session, await brands.default(session), n=1))[0]
     notifier = _FakeNotifier()
     await process_callback(session, notifier, _photo_cb(post.id, "keep"), _OWNER_SETTINGS)
     assert notifier.toasts[-1][1] == "📚 Kept (learning only)"
@@ -827,7 +832,7 @@ async def test_keep_callback_keeps_and_stays_off_queue(session: AsyncSession) ->
 
 
 async def test_almost_picker_then_chip_then_retry(session: AsyncSession) -> None:
-    post = (await generate.generate_batch(session, n=1, brand="b"))[0]
+    post = (await generate.generate_batch(session, await brands.default(session), n=1))[0]
     notifier = _FakeNotifier()
     await process_callback(session, notifier, _photo_cb(post.id, "almost"), _OWNER_SETTINGS)
     assert notifier.toasts[-1][1] == "What's off?" and notifier.almost_marks[-1] is True
@@ -854,7 +859,7 @@ async def test_almost_picker_then_chip_then_retry(session: AsyncSession) -> None
 
 
 async def test_almost_ban_chip_is_refused(session: AsyncSession) -> None:
-    post = (await generate.generate_batch(session, n=1, brand="b"))[0]
+    post = (await generate.generate_batch(session, await brands.default(session), n=1))[0]
     cb = _photo_cb(post.id, "almostr")
     cb["data"] = f"almostr:{post.id}:ban_image"
     await process_callback(session, _FakeNotifier(), cb, _OWNER_SETTINGS)
@@ -864,7 +869,7 @@ async def test_almost_ban_chip_is_refused(session: AsyncSession) -> None:
 
 
 async def test_retry_of_non_almost_is_refused(session: AsyncSession) -> None:
-    post = (await generate.generate_batch(session, n=1, brand="b"))[0]
+    post = (await generate.generate_batch(session, await brands.default(session), n=1))[0]
     notifier = _FakeNotifier()
     await process_callback(session, notifier, _photo_cb(post.id, "retry"), _OWNER_SETTINGS)
     assert notifier.suggestions == [] and "nothing to retry" in notifier.messages[-1]

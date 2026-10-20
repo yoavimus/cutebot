@@ -32,7 +32,7 @@ async def _run(
 
     monkeypatch.setattr(llm, "caption_image", fake_caption)
     monkeypatch.setattr(db, "SessionLocal", _Sessions())
-    monkeypatch.setattr(stock, "list_images", lambda s: [Path("a.jpg"), Path("b.jpg")])
+    monkeypatch.setattr(stock, "list_images", lambda s, prefix: [Path("a.jpg"), Path("b.jpg")])
     monkeypatch.setattr(eval_models, "load_brand", lambda: "brand")
     out = tmp_path / "out.md"
     await eval_models.run(["m/x"], 2, str(out), learning)
@@ -44,6 +44,7 @@ async def test_learning_flag_passes_db_context(
 ) -> None:
     session.add(
         Post(
+            brand_id=1,
             image_ref="1.jpg",
             caption_he="אושר",
             caption_en="ok",

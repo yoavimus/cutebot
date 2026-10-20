@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import learning, llm
 from app.brand import load_brand
 from app.config import Settings
+from app.models import Brand
 
 
 @dataclass
@@ -32,16 +33,20 @@ class Proposal:
 _PENDING: dict[str, tuple[str, str]] = {}  # token -> (base brand text, new brand text)
 
 
-async def propose(session: AsyncSession, settings: Settings) -> Proposal | str:
-    """A ``Proposal`` to DM, or a plain-text reason there's nothing to propose."""
-    ctx = await learning.build_context(session, settings)
+async def propose(session: AsyncSession, settings: Settings, brand: Brand) -> Proposal | str:
+    """A ``Proposal`` to DM, or a plain-text reason there's nothing to propose.
+
+    The evidence is ``brand``'s history. The text still comes from ``brand.md`` until M10.2
+    moves propose/apply onto the brand row.
+    """
+    ctx = await learning.build_context(session, brand.id, settings)
     if ctx.is_empty:
         return "Nothing to learn from yet — no approvals, edits, or rejections in the window."
-    brand = load_brand()
-    result = await llm.distill_brand(brand, learning.render(ctx), settings)
+    current = load_brand()
+    result = await llm.distill_brand(current, learning.render(ctx), settings)
     diff = "".join(
         difflib.unified_diff(
-            brand.splitlines(keepends=True),
+            current.splitlines(keepends=True),
             result.new_brand.splitlines(keepends=True),
             "brand.md",
             "brand.md (proposed)",
@@ -50,7 +55,7 @@ async def propose(session: AsyncSession, settings: Settings) -> Proposal | str:
     if not diff:
         return f"No changes proposed. {result.rationale}"
     token = secrets.token_hex(4)
-    _PENDING[token] = (brand, result.new_brand)
+    _PENDING[token] = (current, result.new_brand)
     return Proposal(token, diff, result.rationale)
 
 
