@@ -3,7 +3,7 @@
 > Phone review copy: https://claude.ai/code/artifact/346305df-1d1c-4b2a-9760-805f5ebf7a19
 > (comments there are folded back here; this file is canonical).
 > Tickets: **CUT-73** epic · **CUT-74** M10.1 · **CUT-75** M10.2 · **CUT-76** M10.3.
-> Kickoff: `docs/plans/M10_KICKOFF.md`. Decisions under "Risks" confirmed 2026-10-21.
+> Kickoff: `docs/archive/M10_KICKOFF.md`. Decisions under "Risks" confirmed 2026-10-21.
 
 ## Goal
 
@@ -78,7 +78,7 @@ Branch `m10-tenant`, one checkout, no worktrees. Sessions split by model, not ti
 2. **Session 2 — Sonnet 5.5: M10.2, M10.3, close-out.** Pushes, opens the PR, never merges.
 3. **Planner: review, merge, deploy, tickets.** After deploy: `railway connect postgres` → no NULL `brand_id`.
 
-Kickoff: `docs/plans/M10_KICKOFF.md` on approval (common block + one block per session).
+Kickoff: `docs/archive/M10_KICKOFF.md` on approval (common block + one block per session).
 
 ## Risks and decisions to confirm
 

@@ -34,6 +34,7 @@ the index. Details of what each one changed live in those plans and in git.
 | Owner review round | `/help` + command menu, `/stock` + 🚫 Ban image, no stock recycling, eval cost column | 2026-10-05 | `docs/issues/cutebot_issues_05_10_2026*.md` |
 | M8 — Learning loop v1 | `app/learning.py` context in every caption, ✏️ Fix (edit = strongest signal, migration 0006), `--learning` eval flag, `/distill` brand proposals (CUT-63…67) | 2026-10-13 | `docs/archive/M8_PLAN.md` |
 | M9 — Bot console v2 | verdicts `📚 Keep` / `🤏 Almost` (+chips) / `🔁 Retry` (status `kept`, `Post.retry_of`, migration 0007), `/mode learning\|live` + `/schedule` from the bot (`settings` table, migration 0008), slash menu + HTML + inline drill-down buttons (CUT-68…71) | 2026-10-15 | `docs/archive/M9_PLAN.md` |
+| M10 — Tenant seam | `brands` table (one default row, chat id → brand), `brand_id` on posts/batches/feedback/banned_images/settings (migration 0009), brand text in the DB with `brand_text_prev` (`/distill` edits the row, `/brand`, `scripts/brand_sync.py`; `brand.md` = seed), tokens + `cost_usd` per post/batch with a `/status` cost line (migration 0010). Nothing visible changes (CUT-73…76) | 2026-10-21 (PR open; deploy pending) | `docs/archive/M10_PLAN.md` |
 
 ---
 
@@ -42,13 +43,12 @@ the index. Details of what each one changed live in those plans and in git.
 
 | # | Milestone | What ships | Size |
 |---|-----------|------------|------|
-| M10 | **Tenant seam** | `brands` table (one default row), `brand_id` on posts/batches/feedback/banned_images/settings, brand text moves into the DB (`/distill` edits the row), `cost_usd` per batch/post. Nothing visible changes | 2–3 d |
 | M11 | **Media v2** | Telegram files + albums (full quality), `/stock` paging with thumbnails + inline ban/delete, **Google Drive folder sync** (owner shares a folder with the bot's service account; nightly + `/sync`; posted/banned written back into subfolders). Google Photos only via the Picker API (`/import`, manual pick) — optional | 1 wk |
 | M12 | **Anchors (steering)** | `/idea <text>` anchors that steer an image post; opt-in calendar prompts a week ahead (`/date` for brand dates); brand-facts stock extracted from the brand text; anchors are consumables shown in `/stock`, theme cooldown doubles per use, hard ratio ceiling in the queue; anchor-steered stock image pick via cached `visual_concept` | 1 wk |
 | M13 | **Beta onboarding** | `/start` wizard for an unknown chat (name → brand voice from pasted text or 5 questions → photos → connect Instagram → schedule → starts in learning mode); per-brand IG token + refresh job. **Start the Meta review for messaging here** (weeks of lead time) | 1–2 wk |
 | M14 | **Instagram DM assistant** | three tiers from a `## DM guidelines` brand section: auto-answer only with a cited guideline line, draft-to-Telegram (✅ Send / ✏️ Fix / ❌, 24h-window countdown on the card), escalate to the owner with the thread; `Post` generalises to a reviewable item; replies feed learning like posts | 2 wk |
 | M15 | **Analytics loop** | nightly IG insights into `post_metrics`, top performers in the learning context, weekly digest DM — once there is published data | 3 d |
-| M16 | **Limits & billing** | per-brand usage caps, cost view in `/status`, manual invoicing; payment provider only when a brand asks to pay | 3–4 d |
+| M16 | **Limits & billing** | per-brand usage caps (cost is already stored per post/batch since M10), manual invoicing; payment provider only when a brand asks to pay | 3–4 d |
 | — | **Carousels** | filler between any two milestones; design below | 2–3 d |
 
 Open owner steps (M9 shipped — deploy, then `/mode learning`): the paid learning A/B (`eval_models

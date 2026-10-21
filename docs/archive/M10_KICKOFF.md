@@ -27,7 +27,7 @@ with a summary.
 1. `CLAUDE.md` and `docs/DEV_GUIDELINES.md` — project rules (approval gate is
    load-bearing; structured LLM output; migrations for DB changes; lint + types + tests
    before moving on).
-2. `docs/plans/M10_PLAN.md` — the approved plan. Canonical for scope and design; the
+2. `docs/archive/M10_PLAN.md` — the approved plan. Canonical for scope and design; the
    decisions under "Risks and decisions" were confirmed on 2026-10-21 and are not up for
    debate. Read all of it, not only your section.
 3. Your Linear tickets (named in your session block) and the epic **CUT-73**. Linear MCP
@@ -122,7 +122,7 @@ Your tickets, in order:
    `scripts/eval_models.py`, which imports it), tokens + cost stored in
    `generate_batch`, batch sum, one cost line in `/status`.
 3. **Close-out (CUT-73)**: ROADMAP M10 row + "Next" header, PRODUCT_SPEC data section,
-   CLAUDE.md summary line, `docs/plans/M10_PLAN.md` and this file moved to
+   CLAUDE.md summary line, `docs/archive/M10_PLAN.md` and this file moved to
    `docs/archive/`, SCRIPTS_REFERENCE checked against every new command and script.
 
 Done = both tickets green in Linear with comments, gate green, fresh-SQLite boot clean,
