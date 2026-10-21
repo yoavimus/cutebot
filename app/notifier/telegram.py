@@ -27,6 +27,7 @@ import json
 import logging
 import re
 import sys
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -635,7 +636,7 @@ async def _cmd_help(
     for group in dict.fromkeys(g for g, *_ in _COMMANDS):
         lines.append(f"\n<b>{group}</b>")
         lines += [f"/{c} {e(u)}".rstrip() for g, c, _, u in _COMMANDS if g == group]
-    lines.append("\nSend a photo to add it to the stock library.")
+    lines.append("\nSend photos to add them to the stock library — send as file for full quality.")
     await notifier.send_message("\n".join(lines), html=True)
 
 
@@ -1048,31 +1049,111 @@ _HANDLERS: dict[str, Any] = {
 # ─────────────────────────────── photo upload ────────────────────────────────
 
 
-async def _handle_photo_upload(
-    notifier: TelegramNotifier, brand: Brand, msg: dict, settings: Settings
-) -> None:
-    photo = msg.get("photo", [])
-    if not photo:
-        return
-    file_id = photo[-1]["file_id"]  # largest size is last
-    async with httpx.AsyncClient(timeout=30) as client:
+_BOT_DOWNLOAD_MAX = 20 * 1024 * 1024  # Telegram's bot getFile limit
+_ALBUM_QUIET = 2.0  # seconds without a new file before the one reply per album
+_IMAGE_MIME_EXT = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/heic": ".heic",
+    "image/heif": ".heif",
+}
+
+
+@dataclass
+class _Album:
+    saved: int = 0
+    dupes: int = 0
+    failed: int = 0
+    timer: asyncio.Task[None] | None = None
+
+
+# ponytail: in-process album state; a restart inside the 2 s window loses one reply, not files.
+_albums: dict[str, _Album] = {}
+
+
+def _upload_summary(saved: int, dupes: int, failed: int = 0) -> str:
+    parts = [f"Saved {saved} photo{'s' if saved != 1 else ''}"]
+    if dupes:
+        parts.append(f"{dupes} duplicate{'s' if dupes != 1 else ''} skipped")
+    if failed:
+        parts.append(f"{failed} failed")
+    return ", ".join(parts)
+
+
+async def _download_telegram_file(
+    settings: Settings, notifier: TelegramNotifier, file_id: str
+) -> tuple[bytes, str] | None:
+    """``(bytes, file_path)`` of a Telegram file, or None when getFile refuses."""
+    async with httpx.AsyncClient(timeout=60) as client:
         resp = await client.get(notifier._url("getFile"), params={"file_id": file_id})
         data = resp.json()
         if not data.get("ok"):
             logger.warning("getFile failed: %s", data)
-            await notifier.send_message("Failed to retrieve photo from Telegram.")
-            return
+            return None
         file_path = data["result"]["file_path"]
         dl_url = f"https://api.telegram.org/file/bot{settings.telegram_bot_token}/{file_path}"
-        img_resp = await client.get(dl_url)
+        return (await client.get(dl_url)).content, file_path
 
-    stock_dir = stock.brand_dir(settings, brand.stock_prefix)
-    stock_dir.mkdir(parents=True, exist_ok=True)
-    filename = Path(file_path).name
-    dest = stock_dir / filename
-    dest.write_bytes(img_resp.content)
-    await notifier.send_message(f"Photo saved to stock library as {filename}.")
-    logger.info("Photo uploaded to stock: %s", dest)
+
+async def _flush_album(group: str, notifier: TelegramNotifier, delay: float) -> None:
+    await asyncio.sleep(delay)
+    album = _albums.pop(group, None)
+    if album is not None:
+        await notifier.send_message(_upload_summary(album.saved, album.dupes, album.failed))
+
+
+async def _handle_upload(
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, msg: dict, settings: Settings
+) -> None:
+    """A compressed ``photo`` or an image ``document`` (the original) → the stock library."""
+    doc = msg.get("document")
+    if doc is not None:
+        file_id, size, name = doc["file_id"], doc.get("file_size") or 0, doc.get("file_name") or ""
+        ext = _IMAGE_MIME_EXT.get((doc.get("mime_type") or "").lower()) or Path(name).suffix.lower()
+        if size > _BOT_DOWNLOAD_MAX:
+            await notifier.send_message("That file is too large for Telegram — use Drive.")
+            return
+    else:
+        photo = msg["photo"][-1]  # largest size is last
+        file_id, name, ext = photo["file_id"], "", ".jpg"
+    group = msg.get("media_group_id")
+
+    saved = dupe = failed = 0
+    got = await _download_telegram_file(settings, notifier, file_id)
+    if got is None:
+        failed = 1
+    else:
+        content, file_path = got
+        ext = ext if ext in stock.IMPORTABLE else Path(file_path).suffix.lower() or ".jpg"
+        stock_dir = stock.brand_dir(settings, brand.stock_prefix)
+        stock_dir.mkdir(parents=True, exist_ok=True)
+        dest = stock.unique_path(stock_dir, (Path(name).stem or Path(file_path).stem) + ext)
+        dest.write_bytes(content)
+        try:
+            row = await stock.register(session, brand, dest, "telegram", file_id)
+        except Exception:  # noqa: BLE001 — an unreadable HEIC must not lose the rest of an album
+            logger.exception("Could not import %s", dest)
+            dest.unlink(missing_ok=True)
+            row, failed = None, 1
+        await session.commit()
+        saved, dupe = int(row is not None), int(row is None and not failed)
+
+    if not group:
+        if failed:
+            await notifier.send_message("Failed to import that file.")
+        else:
+            await notifier.send_message(_upload_summary(saved, dupe))
+        return
+    album = _albums.setdefault(group, _Album())
+    album.saved, album.dupes, album.failed = (
+        album.saved + saved,
+        album.dupes + dupe,
+        album.failed + failed,
+    )
+    if album.timer is not None:
+        album.timer.cancel()
+    album.timer = asyncio.create_task(_flush_album(group, notifier, _ALBUM_QUIET))
 
 
 # ─────────────────────────────── message dispatcher ──────────────────────────
@@ -1134,8 +1215,10 @@ async def process_message(
             await handler(session, notifier, brand, args.strip(), settings)
         return
 
-    if msg.get("photo"):
-        await _handle_photo_upload(notifier, brand, msg, settings)
+    doc_mime = (msg.get("document") or {}).get("mime_type") or ""
+    doc_ext = Path((msg.get("document") or {}).get("file_name") or "").suffix.lower()
+    if msg.get("photo") or doc_mime.startswith("image/") or doc_ext in stock.IMPORTABLE:
+        await _handle_upload(session, notifier, brand, msg, settings)
 
 
 # ─────────────────────────────── callback handler ────────────────────────────

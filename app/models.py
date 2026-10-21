@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -54,6 +54,9 @@ class Brand(Base):
     brand_text: Mapped[str] = mapped_column(Text, default="")
     brand_text_prev: Mapped[str | None] = mapped_column(Text, default=None)
     stock_prefix: Mapped[str] = mapped_column(String(128), default="")
+    # Google Drive folder the nightly sync pulls from (M11.3); None = not linked.
+    drive_folder_id: Mapped[str | None] = mapped_column(String(128), default=None)
+    drive_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
@@ -164,3 +167,23 @@ class Setting(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
+
+
+class StockImage(Base):
+    """Provenance of one stock file (M11): where it came from and its content hash.
+
+    The folder stays the store and ``banned_images`` stays the ban ledger; this row only
+    records source, hash (duplicate skip) and soft-delete. A file with no row is ``manual``
+    until ``stock.backfill_manual`` sees it.
+    """
+
+    __tablename__ = "stock_images"
+    __table_args__ = (Index("ix_stock_images_brand_sha256", "brand_id", "sha256"),)
+
+    brand_id: Mapped[int] = mapped_column(ForeignKey("brands.id"), primary_key=True)
+    image_ref: Mapped[str] = mapped_column(Text, primary_key=True)
+    source: Mapped[str] = mapped_column(String(16))  # telegram | drive | manual
+    source_id: Mapped[str | None] = mapped_column(String(256), default=None)
+    sha256: Mapped[str] = mapped_column(String(64))
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)

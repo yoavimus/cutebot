@@ -104,7 +104,9 @@ Settings
 /distill                propose a brand-text revision from recent feedback (✅ Apply / ❌ Discard)
 /brand                  show the current brand text (typed only, not in the menu)
 /help                   grouped list (also /start)
-(photo DM)              save the photo into the stock library
+(photo DM)              save the compressed photo into the stock library (stock.register: SHA-256 duplicate skip)
+(file DM)               image document = the original, full quality; HEIC/HEIF -> JPEG; >20 MB -> "use Drive"
+(album)                 each file saved on arrival; ONE reply "Saved N photos, M duplicates skipped" after 2 s quiet
 ```
 
 **Slash menu** — registered with `setMyCommands` at startup, scoped to the owner chat

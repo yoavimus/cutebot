@@ -873,3 +873,118 @@ async def test_retry_of_non_almost_is_refused(session: AsyncSession) -> None:
     notifier = _FakeNotifier()
     await process_callback(session, notifier, _photo_cb(post.id, "retry"), _OWNER_SETTINGS)
     assert notifier.suggestions == [] and "nothing to retry" in notifier.messages[-1]
+
+
+# ─────────────────────────────── uploads (M11.1) ─────────────────────────────
+
+
+def _jpeg(color: str = "red") -> bytes:
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (8, 8), color).save(buf, format="JPEG")
+    return buf.getvalue()
+
+
+def _heic() -> bytes:
+    import io
+
+    import pillow_heif
+    from PIL import Image
+
+    buf = io.BytesIO()
+    pillow_heif.from_pillow(Image.new("RGB", (8, 8), "blue")).save(buf, format="HEIF")
+    return buf.getvalue()
+
+
+@pytest.fixture
+def uploads(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict:
+    """Fake Telegram downloads: ``files[file_id] = (bytes, file_path)``."""
+    from app.notifier import telegram
+
+    files: dict[str, tuple[bytes, str]] = {}
+
+    async def fake_download(settings: Settings, notifier: object, file_id: str) -> object:
+        return files.get(file_id)
+
+    monkeypatch.setattr(telegram, "_download_telegram_file", fake_download)
+    monkeypatch.setattr(telegram, "_ALBUM_QUIET", 0.01)
+    return {
+        "files": files,
+        "settings": _OWNER_SETTINGS.model_copy(update={"stock_images_dir": str(tmp_path)}),
+        "dir": tmp_path,
+    }
+
+
+def _upload_msg(**extra: object) -> dict:
+    return {"chat": {"id": _OWNER_ID}, **extra}
+
+
+async def test_document_upload_keeps_original(session: AsyncSession, uploads: dict) -> None:
+    uploads["files"]["d1"] = (_jpeg(), "documents/file_1.jpg")
+    n = _FakeNotifier()
+    doc = {"file_id": "d1", "file_name": "IMG_1.jpg", "mime_type": "image/jpeg", "file_size": 10}
+    await process_message(session, n, _upload_msg(document=doc), uploads["settings"])
+    assert (uploads["dir"] / "IMG_1.jpg").read_bytes() == _jpeg()
+    assert n.messages == ["Saved 1 photo"]
+    row = await session.get(stock.StockImage, (1, "IMG_1.jpg"))
+    assert row is not None and row.source == "telegram" and row.source_id == "d1"
+
+
+async def test_document_over_20mb_points_to_drive(session: AsyncSession, uploads: dict) -> None:
+    n = _FakeNotifier()
+    doc = {"file_id": "big", "mime_type": "image/jpeg", "file_size": 21 * 1024 * 1024}
+    await process_message(session, n, _upload_msg(document=doc), uploads["settings"])
+    assert "too large for Telegram" in n.messages[0] and "Drive" in n.messages[0]
+    assert not list(uploads["dir"].iterdir())
+
+
+async def test_non_image_document_is_ignored(session: AsyncSession, uploads: dict) -> None:
+    n = _FakeNotifier()
+    doc = {"file_id": "p", "file_name": "a.pdf", "mime_type": "application/pdf"}
+    await process_message(session, n, _upload_msg(document=doc), uploads["settings"])
+    assert n.messages == []
+
+
+async def test_photo_upload_and_duplicate(session: AsyncSession, uploads: dict) -> None:
+    uploads["files"]["p1"] = (_jpeg(), "photos/file_5.jpg")
+    uploads["files"]["p2"] = (_jpeg(), "photos/file_6.jpg")  # same bytes, new file id
+    n = _FakeNotifier()
+    for fid in ("p1", "p2"):
+        await process_message(
+            session, n, _upload_msg(photo=[{"file_id": "s"}, {"file_id": fid}]), uploads["settings"]
+        )
+    assert n.messages == ["Saved 1 photo", "Saved 0 photos, 1 duplicate skipped"]
+    assert [p.name for p in uploads["dir"].iterdir()] == ["file_5.jpg"]
+
+
+async def test_album_of_three_replies_once(session: AsyncSession, uploads: dict) -> None:
+    import asyncio
+
+    n = _FakeNotifier()
+    for i, data in enumerate((_jpeg("red"), _jpeg("green"), _jpeg("red"))):
+        uploads["files"][f"a{i}"] = (data, f"photos/file_{i}.jpg")
+        await process_message(
+            session,
+            n,
+            _upload_msg(media_group_id="g1", photo=[{"file_id": f"a{i}"}]),
+            uploads["settings"],
+        )
+    assert n.messages == []  # still inside the quiet period
+    await asyncio.sleep(0.1)
+    assert n.messages == ["Saved 2 photos, 1 duplicate skipped"]
+
+
+async def test_heic_document_becomes_jpeg(session: AsyncSession, uploads: dict) -> None:
+    from PIL import Image
+
+    uploads["files"]["h"] = (_heic(), "documents/file_9.heic")
+    n = _FakeNotifier()
+    doc = {"file_id": "h", "file_name": "IMG_2.HEIC", "mime_type": "image/heic", "file_size": 5}
+    await process_message(session, n, _upload_msg(document=doc), uploads["settings"])
+    assert [p.name for p in uploads["dir"].iterdir()] == ["IMG_2.jpg"]
+    with Image.open(uploads["dir"] / "IMG_2.jpg") as img:
+        assert img.format == "JPEG"
+    assert await session.get(stock.StockImage, (1, "IMG_2.jpg")) is not None

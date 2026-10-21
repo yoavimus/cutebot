@@ -24,6 +24,7 @@ httpx==0.28.1               # litellm>=1.101 needs >=0.28
 
 # Image handling (GET /media/... JPEG conversion for Instagram Graph)
 Pillow==11.1.0
+pillow-heif==1.8.1          # HEIC/HEIF -> JPEG on import (M11.1)
 
 # Linting / type checking / testing (dev)
 ruff==0.9.1
