@@ -11,9 +11,10 @@ for scope, architecture, and roadmap.
 Shipped: the four-stage cycle in prod (Railway), Telegram operator console, Instagram
 publisher, learning loop v1, bot console v2 (Keep/Almost/Retry verdicts, `/mode`,
 `/schedule`, slash menu + HTML) and the tenant seam (M10: `brands` table, `brand_id`
-everywhere, brand text in the DB with `brand.md` as seed, cost per post) — M0–M10. Next
-(2026-10-14 order): media v2 → anchors → beta onboarding → IG DM assistant → analytics →
-limits; carousels as filler — `docs/ROADMAP.md`. Instagram-only until a brand asks otherwise.
+everywhere, brand text in the DB with `brand.md` as seed, cost per post) and media v2 (M11:
+Telegram files + albums, `/stock` thumbnail browser, Google Drive folder sync with
+posted/banned write-back, `stock_images` provenance) — M0–M11. Next (2026-10-14 order):
+anchors → beta onboarding → IG DM assistant → analytics → limits; carousels as filler — `docs/ROADMAP.md`. Instagram-only until a brand asks otherwise.
 
 ## Docs layout
 

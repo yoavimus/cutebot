@@ -2,7 +2,7 @@
 
 > Tickets: **CUT-77** (epic) · **CUT-78** M11.1 files, albums, provenance · **CUT-79** M11.2 stock
 > browser · **CUT-80** M11.3 Google Drive sync and write-back. Branch `m11-media`.
-> Kickoff: `docs/plans/M11_KICKOFF.md`. Decisions under "Risks" confirmed 2026-10-21.
+> Kickoff: `docs/archive/M11_KICKOFF.md`. Decisions under "Risks" confirmed 2026-10-21.
 > Phone copy of this plan: https://claude.ai/artifact/WXaUp9e8KQ3K96VL2UMJxC
 
 ## Goal

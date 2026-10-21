@@ -25,7 +25,7 @@ with me. Work until your tickets are done or genuinely blocked, then stop with a
 
 1. `CLAUDE.md` and `docs/DEV_GUIDELINES.md` — project rules (approval gate is load-bearing;
    structured LLM output; migrations for DB changes; lint + types + tests before moving on).
-2. `docs/plans/M11_PLAN.md` — the approved plan. Canonical for scope and design; the
+2. `docs/archive/M11_PLAN.md` — the approved plan. Canonical for scope and design; the
    decisions under "Risks and decisions" were confirmed on 2026-10-21 and are not up for
    debate. Read all of it, not only your section.
 3. Your Linear tickets (named in your session block) and the epic **CUT-77**. Linear MCP
