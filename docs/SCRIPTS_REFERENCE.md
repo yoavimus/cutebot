@@ -32,6 +32,9 @@ Health check:
 curl -s http://127.0.0.1:8002/health        # -> {"status":"ok"}
 ```
 
+Scheduler jobs: `generation` (cron), `posting-HHMM` (slots), `trash-purge` (03:30 daily, empties
+`stock/.trash/` entries older than 30 days). The home card warns above 80 % stock-volume usage.
+
 ## Trigger pipeline stages manually (no waiting for cron)
 
 Dev-only endpoints (enabled when `APP_ENV=development`; all return 404 in prod):
@@ -93,7 +96,7 @@ Pipeline
 /postnow [id]           publish front-of-queue, or a specific APPROVED post (refused in learning mode / on kept)
 /requeue <id>           move a FAILED post back into the queue (typed only — not in the menu)
 Library
-/stock [unban <file>]   unused / used / banned counts; first 10 banned rows have ♻️ Unban buttons
+/stock [unban <file>]   unused / used / banned counts; 🖼 Browse button; first 10 banned rows have ♻️ Unban buttons
 Settings
 /schedule               generation cron + slots (SCHEDULE_TZ) with next-run times, plus edit buttons:
                         ✖ per slot, ＋ Add slot / ⏰ Generate (hour grid 07–22), ↺ Reset — whole hours only
@@ -133,6 +136,8 @@ message, so Telegram's 4096-char limit applies; `/stock` and `/queue` already ca
 | `retry:<id>` | 🔁 re-caption an Almost'd post's image as a new card (`Post.retry_of`) |
 | `fix:<id>` | ForceReply prompt for the corrected caption |
 | `postnow:<id>` / `drop:<id>` | `/queue` row buttons → `publish_by_id` / reject (owner-gated) |
+| `stk:p:<page>` | Stock › Browse: sends the page's 10 thumbnails (320 px, `n · used k×, last d Mon`) + one control message |
+| `stk:b:<h>` / `stk:d:<h>` | control row 🚫 ban / 🗑 delete (`<h>` = 10-char hash of the ref); delete moves the file to `stock/.trash/<brand id>/` and sets `deleted_at`; refused while a suggested/approved/publishing post uses it. `stk:n` = inert ✖ |
 | `unban:<ref>` | `/stock` row button; refs over Telegram's 64-byte callback cap show the typed command instead |
 | `con:<cmd>` · `gen:<1\|3\|5>` · `pend:resend` | console card taps (owner-gated); long ones show "⏳ …" in the card first |
 | `sch:view` · `sch:pick:add\|gen` · `sch:add:<H>` · `sch:del:<HHMM>` · `sch:gen:<H>` · `sch:reset` | `/schedule` edit buttons; each replays through `_cmd_schedule` (owner-gated) |

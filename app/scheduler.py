@@ -155,7 +155,17 @@ def build_scheduler(
             except Exception:
                 logger.exception("Publishing failed for brand %s.", brand.id)
 
+    async def trash_tick() -> None:
+        logger.info("Stock trash purge: %d file(s) removed.", stock.purge_trash(settings))
+
     scheduler.posting_tick = posting_tick
+    scheduler.add_job(
+        trash_tick,
+        CronTrigger(hour=3, minute=30, timezone=tz),
+        id="trash-purge",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
     scheduler.add_job(
         generation_tick,
         CronTrigger.from_crontab(schedule.generation_cron, timezone=tz),

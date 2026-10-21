@@ -34,6 +34,14 @@ class _FakeNotifier:
         self.edited: list[tuple[int, int, Post]] = []
         self.almost_marks: list[bool] = []
         self.retried: list[int] = []
+        self.albums: list[list[tuple[bytes, str]]] = []
+        self.controls: list[tuple[str, list]] = []
+
+    async def send_media_group(self, items: list[tuple[bytes, str]]) -> None:
+        self.albums.append(items)
+
+    async def edit_control(self, cb_message: dict, text: str, rows: list) -> None:
+        self.controls.append((text, rows))
 
     async def send_suggestion(self, post: Post) -> None:
         self.suggestions.append(post)
@@ -523,7 +531,7 @@ async def test_unban_callback_and_long_ref_falls_back_to_text(session: AsyncSess
     await session.commit()
     n = _FakeNotifier()
     await process_message(session, n, _msg(_OWNER_ID, "/stock"), _OWNER_SETTINGS)
-    assert [b["callback_data"] for row in n.keyboards[0] for b in row] == ["unban:a.jpg"]
+    assert [b["callback_data"] for row in n.keyboards[0] for b in row] == ["stk:p:0", "unban:a.jpg"]
     assert f"/stock unban {long_ref}" in n.messages[0]
 
     await process_callback(session, n, _owner_cb("unban:a.jpg"), _OWNER_SETTINGS)
@@ -988,3 +996,161 @@ async def test_heic_document_becomes_jpeg(session: AsyncSession, uploads: dict) 
     with Image.open(uploads["dir"] / "IMG_2.jpg") as img:
         assert img.format == "JPEG"
     assert await session.get(stock.StockImage, (1, "IMG_2.jpg")) is not None
+
+
+# ─────────────────────────────── stock browser (M11.2) ───────────────────────
+
+
+def _fill(directory: Path, n: int) -> list[str]:
+    from PIL import Image
+
+    names = [f"img{i:02d}.jpg" for i in range(n)]
+    for name in names:
+        Image.new("RGB", (40, 30), "gray").save(directory / name)
+    return names
+
+
+def _stk(data: str, message: dict | None = None) -> dict:
+    msg = message or {"message_id": 7, "chat": {"id": _OWNER_ID}, "text": "x"}
+    return {"id": "c", "data": data, "message": msg}
+
+
+def _flat(rows: list) -> list[dict]:
+    return [b for row in rows for b in row]
+
+
+async def test_browse_pages_25_images_into_3(session: AsyncSession, uploads: dict) -> None:
+    _fill(uploads["dir"], 25)
+    n = _FakeNotifier()
+    for page, size in ((0, 10), (1, 10), (2, 5)):
+        await process_callback(session, n, _stk(f"stk:p:{page}"), uploads["settings"])
+        assert len(n.albums[-1]) == size
+        text, rows = n.keyboards and (n.messages[-1], n.keyboards[-1])
+        assert text.startswith(f"Page {page + 1}/3")
+        cbs = [b["callback_data"] for b in _flat(rows)]
+        assert (f"stk:p:{page - 1}" in cbs) == (page > 0)
+        assert (f"stk:p:{page + 1}" in cbs) == (page < 2)
+        assert "con:home" in cbs
+        assert sum(c.startswith("stk:b:") for c in cbs) == size
+        assert sum(c.startswith("stk:d:") for c in cbs) == size
+
+
+async def test_browse_empty_library(session: AsyncSession, uploads: dict) -> None:
+    n = _FakeNotifier()
+    await process_callback(session, n, _stk("stk:p:0"), uploads["settings"])
+    assert n.albums == [] and "No photos" in n.messages[0]
+
+
+async def test_browse_caption_has_usage(session: AsyncSession, uploads: dict) -> None:
+    _fill(uploads["dir"], 2)
+    session.add(
+        Post(
+            brand_id=1,
+            image_ref="img00.jpg",
+            caption_he="x",
+            caption_en="x",
+            visual_concept="x",
+            status=PostStatus.PUBLISHED,
+        )
+    )
+    await session.commit()
+    n = _FakeNotifier()
+    await process_callback(session, n, _stk("stk:p:0"), uploads["settings"])
+    caps = [c for _, c in n.albums[0]]
+    assert caps[0].startswith("1 · used 1×, last ") and caps[1] == "2 · unused"
+
+
+async def _open_page(session: AsyncSession, n: _FakeNotifier, uploads: dict) -> dict:
+    await process_callback(session, n, _stk("stk:p:0"), uploads["settings"])
+    return {
+        "message_id": 9,
+        "chat": {"id": _OWNER_ID},
+        "text": n.messages[-1],
+        "reply_markup": {"inline_keyboard": n.keyboards[-1]},
+    }
+
+
+async def test_browse_ban_and_delete_redraw(session: AsyncSession, uploads: dict) -> None:
+    names = _fill(uploads["dir"], 3)
+    n = _FakeNotifier()
+    ctl = await _open_page(session, n, uploads)
+    ban = _flat(ctl["reply_markup"]["inline_keyboard"])[0]["callback_data"]  # item 1
+    dele = next(
+        b["callback_data"]
+        for b in _flat(ctl["reply_markup"]["inline_keyboard"])
+        if b["text"] == "🗑 2"
+    )
+
+    await process_callback(session, n, _stk(ban, ctl), uploads["settings"])
+    assert n.toasts[-1][1] == "🚫 Banned"
+    assert await session.get(BannedImage, (1, names[0])) is not None
+    _, rows = n.controls[-1]
+    assert _flat(rows)[0]["text"] == "🚫1✓"
+
+    ctl["reply_markup"] = {"inline_keyboard": rows}
+    await process_callback(session, n, _stk(dele, ctl), uploads["settings"])
+    assert n.toasts[-1][1] == "🗑 Moved to trash"
+    assert not (uploads["dir"] / names[1]).exists()
+    assert (uploads["dir"] / ".trash" / "1" / names[1]).exists()
+    row = await session.get(stock.StockImage, (1, names[1]))
+    assert row is not None and row.deleted_at is not None
+    _, rows = n.controls[-1]
+    texts = [b["text"] for b in _flat(rows)]
+    assert texts.count("✖") == 2 and "🚫1✓" in texts and "🗑 3" in texts  # numbering kept
+
+    await process_callback(session, n, _stk(dele, ctl), uploads["settings"])  # stale tap
+    assert n.toasts[-1][1] == "Already gone"
+
+
+async def test_delete_blocked_while_a_queued_post_needs_it(
+    session: AsyncSession, uploads: dict
+) -> None:
+    names = _fill(uploads["dir"], 2)
+    session.add(
+        Post(
+            brand_id=1,
+            image_ref=names[0],
+            caption_he="x",
+            caption_en="x",
+            visual_concept="x",
+            status=PostStatus.APPROVED,
+        )
+    )
+    await session.commit()
+    n = _FakeNotifier()
+    ctl = await _open_page(session, n, uploads)
+    dele = next(
+        b["callback_data"]
+        for b in _flat(ctl["reply_markup"]["inline_keyboard"])
+        if b["text"] == "🗑 1"
+    )
+    await process_callback(session, n, _stk(dele, ctl), uploads["settings"])
+    assert "in use" in n.toasts[-1][1] and (uploads["dir"] / names[0]).exists()
+    assert n.controls == []
+
+
+def test_purge_trash_expires_after_30_days(tmp_path: Path) -> None:
+    import os
+    import time
+
+    trash = tmp_path / ".trash" / "1"
+    trash.mkdir(parents=True)
+    (trash / "old.jpg").write_bytes(b"x")
+    (trash / "new.jpg").write_bytes(b"x")
+    old = time.time() - 31 * 86400
+    os.utime(trash / "old.jpg", (old, old))
+    assert stock.purge_trash(Settings(stock_images_dir=str(tmp_path))) == 1
+    assert [p.name for p in trash.iterdir()] == ["new.jpg"]
+
+
+async def test_stock_menu_has_browse_and_home_warns_when_full(
+    session: AsyncSession, uploads: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    n = _FakeNotifier()
+    await process_message(session, n, _msg(_OWNER_ID, "/stock"), uploads["settings"])
+    assert n.keyboards[-1][0] == [{"text": "🖼 Browse", "callback_data": "stk:p:0"}]
+    await process_message(session, n, _msg(_OWNER_ID, "/home"), uploads["settings"])
+    assert "Stock volume" not in n.messages[-1]
+    monkeypatch.setattr(stock, "disk_usage_pct", lambda settings: 83)
+    await process_message(session, n, _msg(_OWNER_ID, "/home"), uploads["settings"])
+    assert "⚠️ Stock volume 83% full" in n.messages[-1]

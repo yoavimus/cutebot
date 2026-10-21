@@ -103,6 +103,7 @@ _CALLBACK_DATA_MAX = 64  # bytes, Telegram's cap
 # Output caps: a console tap must never flood the chat or blow Telegram's 4096-char message.
 _PENDING_RESEND = 5  # /pending re-DMs only the newest cards; older ones stay open
 _LIST_ROWS = 10  # /queue and /stock show this many rows, then "+N more"
+_DISK_WARN_PCT = 80  # home card warns above this volume usage
 _GENERATE_MAX = 10  # /generate n is clamped — each post is a paid vision call and a card
 # The pinned console card: one tap = one command, output replaces the card text.
 # /postnow is deliberately absent — publish from the ▶ button on a /queue row.
@@ -230,6 +231,44 @@ class TelegramNotifier:
                     self._url("pinChatMessage"),
                     json={"chat_id": chat, "message_id": mid, "disable_notification": True},
                 )
+
+    async def send_media_group(self, items: list[tuple[bytes, str]]) -> None:
+        """One album of JPEG ``(bytes, caption)`` thumbnails (Telegram: 2–10 items)."""
+        if not self._settings.telegram_bot_token or not self._chat_id:
+            return
+        if len(items) == 1:  # sendMediaGroup needs 2–10 items
+            async with httpx.AsyncClient(timeout=60) as client:
+                await client.post(
+                    self._url("sendPhoto"),
+                    data={"chat_id": self._chat_id, "caption": items[0][1]},
+                    files={"photo": items[0][0]},
+                )
+            return
+        media = [
+            {"type": "photo", "media": f"attach://p{i}", "caption": cap}
+            for i, (_, cap) in enumerate(items)
+        ]
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                self._url("sendMediaGroup"),
+                data={"chat_id": self._chat_id, "media": json.dumps(media)},
+                files={f"p{i}": data for i, (data, _) in enumerate(items)},
+            )
+        if not resp.json().get("ok"):
+            logger.warning("sendMediaGroup rejected: %s", resp.json().get("description"))
+
+    async def edit_control(self, cb_message: dict, text: str, rows: list[list[dict]]) -> None:
+        """Rewrite one of our messages in place (text + inline keyboard)."""
+        async with httpx.AsyncClient(timeout=15) as client:
+            await client.post(
+                self._url("editMessageText"),
+                json={
+                    "chat_id": cb_message["chat"]["id"],
+                    "message_id": cb_message["message_id"],
+                    "text": text,
+                    "reply_markup": {"inline_keyboard": rows},
+                },
+            )
 
     async def set_my_commands(self) -> None:
         """Register the "/" menu for the owner's chat; fall back to the default scope."""
@@ -607,6 +646,8 @@ async def _build_home(
     queued = f"📬 {c['queue']} queued"
     lines.append(f"{queued} · next post {_fmt_next(nxt)}" if nxt else queued)
     lines.append(f"📷 {c['stock']} unused photos")
+    if (used := stock.disk_usage_pct(settings)) is not None and used > _DISK_WARN_PCT:
+        lines.append(f"⚠️ Stock volume {used}% full")
     lines.append("📚 " + e((await _learning_line(session, brand, settings)).split("\n")[0]))
     now = datetime.now(ZoneInfo(settings.schedule_tz)).strftime("%H:%M")
     lines.append(f"<i>updated {now}</i>")
@@ -663,7 +704,7 @@ async def _cmd_stock(
     ).all()
     e = html_lib.escape
     lines = [e(stock.summary_line(c))]
-    keyboard: list[list[dict[str, str]]] = []
+    keyboard: list[list[dict[str, str]]] = [[_btn("🖼 Browse", "stk:p:0")]]
     for ref in banned[:_LIST_ROWS]:
         data = f"unban:{ref}"
         if len(data.encode()) <= _CALLBACK_DATA_MAX:
@@ -674,7 +715,7 @@ async def _cmd_stock(
     if len(banned) > _LIST_ROWS:
         more = len(banned) - _LIST_ROWS
         lines.append(f"… +{more} more banned — /stock unban &lt;file&gt; works for any of them")
-    await notifier.send_message("\n".join(lines), html=True, keyboard=keyboard or None)
+    await notifier.send_message("\n".join(lines), html=True, keyboard=keyboard)
 
 
 async def _cmd_generate(
@@ -1156,6 +1197,127 @@ async def _handle_upload(
     album.timer = asyncio.create_task(_flush_album(group, notifier, _ALBUM_QUIET))
 
 
+# ─────────────────────────────── stock browser ───────────────────────────────
+
+
+def _used_caption(n: int, item: stock.PageItem) -> str:
+    use = "unused" if not item.used else f"used {item.used}×"
+    if item.last_used:
+        use += f", last {item.last_used:%d %b}"
+    return f"{n} · {use}" + (" · 🚫 banned" if item.banned else "")
+
+
+def _browse_rows(
+    hashes: list[str | None], banned: set[int], page: int, pages: int
+) -> list[list[dict[str, str]]]:
+    """Ban row, delete row, nav row. ``hashes[i]`` None = deleted (inert ✖)."""
+    ban_row, del_row = [], []
+    for i, h in enumerate(hashes, 1):
+        if h is None:
+            ban_row.append(_btn("✖", "stk:n"))
+            del_row.append(_btn("✖", "stk:n"))
+        else:
+            ban_row.append(_btn(f"🚫{i}✓" if i in banned else f"🚫 {i}", f"stk:b:{h}"))
+            del_row.append(_btn(f"🗑 {i}", f"stk:d:{h}"))
+    nav = []
+    if page > 0:
+        nav.append(_btn("‹ Prev", f"stk:p:{page - 1}"))
+    if page < pages - 1:
+        nav.append(_btn("Next ›", f"stk:p:{page + 1}"))
+    nav.append(_btn("‹ Menu", "con:home"))
+    return (
+        [ban_row[:5], ban_row[5:], del_row[:5], del_row[5:], nav]
+        if len(hashes) > 5
+        else [
+            ban_row,
+            del_row,
+            nav,
+        ]
+    )
+
+
+async def _show_page(
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, settings: Settings, page: int
+) -> None:
+    await stock.backfill_manual(session, brand, settings)
+    await session.commit()
+    items, page, pages = await stock.page_items(session, brand, settings, page)
+    if not items:
+        await notifier.send_message("No photos in the library yet — send some to this chat.")
+        return
+    root = Path(settings.stock_images_dir)
+    thumbs = [
+        (stock.thumbnail(root / it.ref), _used_caption(n, it)) for n, it in enumerate(items, 1)
+    ]
+    await notifier.send_media_group(thumbs)
+    rows = _browse_rows(
+        [stock.ref_hash(it.ref) for it in items],
+        {n for n, it in enumerate(items, 1) if it.banned},
+        page,
+        pages,
+    )
+    await notifier.send_message(
+        f"Page {page + 1}/{pages} — 🚫 bans the photo, 🗑 moves it to the trash", keyboard=rows
+    )
+
+
+async def _browse_callback(
+    session: AsyncSession,
+    notifier: TelegramNotifier,
+    brand: Brand,
+    cb: dict,
+    arg: str,
+    settings: Settings,
+) -> None:
+    """``stk:p:<page>`` · ``stk:b:<hash>`` · ``stk:d:<hash>`` · ``stk:n`` (inert)."""
+    kind, _, val = arg.partition(":")
+    if kind == "p" and val.isdigit():
+        await notifier.answer_callback(cb["id"], "🖼 Loading…")
+        await _show_page(session, notifier, brand, settings, int(val))
+        return
+    if kind not in ("b", "d"):
+        await notifier.answer_callback(cb["id"], "Gone")
+        return
+    ref = next((r for r in stock.brand_refs(settings, brand) if stock.ref_hash(r) == val), None)
+    if ref is None:
+        await notifier.answer_callback(cb["id"], "Already gone")
+        return
+    if kind == "b":
+        await stock.ban_image(session, brand.id, ref)
+        toast = "🚫 Banned"
+    else:
+        problem = await stock.delete_image(session, brand, settings, ref)
+        toast = "🗑 Moved to trash" if problem is None else f"Can't delete — {problem}"
+    await session.commit()
+    await notifier.answer_callback(cb["id"], toast)
+    if toast.startswith("Can't"):
+        return
+    # Redraw from the keyboard the message already carries: the numbering stays that of the
+    # thumbnails above it, with no server-side page state.
+    msg = cb["message"]
+    markup = msg.get("reply_markup", {}).get("inline_keyboard", [])
+    item_btns = [
+        b
+        for row in markup
+        for b in row
+        if b["callback_data"].startswith(("stk:b:", "stk:d:", "stk:n"))
+    ]
+    ban_btns = item_btns[: len(item_btns) // 2]  # ban row first, then the same count of 🗑
+    hashes: list[str | None] = []
+    banned: set[int] = set()
+    for i, b in enumerate(ban_btns, 1):
+        h = b["callback_data"].removeprefix("stk:b:") if b["callback_data"] != "stk:n" else None
+        if h == val and kind == "d":
+            h = None
+        if b["text"].endswith("✓") or (h == val and kind == "b"):
+            banned.add(i)
+        hashes.append(h)
+    text = msg.get("text") or ""
+    cur, _, tot = text.removeprefix("Page ").split(" ")[0].partition("/")
+    rows = _browse_rows(hashes, banned, int(cur) - 1, int(tot))
+    await notifier.edit_control(msg, text, rows)
+
+
 # ─────────────────────────────── message dispatcher ──────────────────────────
 
 
@@ -1259,7 +1421,9 @@ async def process_callback(
         return
 
     # ── console buttons (/queue, /stock, /mode): state-changing, so owner-gated ──
-    if data.startswith(("con:", "gen:", "pend:", "sch:", "postnow:", "drop:", "unban:", "mode:")):
+    if data.startswith(
+        ("con:", "gen:", "pend:", "sch:", "postnow:", "drop:", "unban:", "mode:", "stk:")
+    ):
         await _console_callback(session, notifier, brand, cb, settings)
         return
 
@@ -1406,6 +1570,9 @@ async def _console_callback(
 ) -> None:
     """``con:<cmd>`` / ``postnow:<id>`` / ``drop:<id>`` / ``unban:<ref>`` / ``mode:<…>``."""
     action, _, arg = cb.get("data", "").partition(":")
+    if action == "stk":  # the browser sends its own messages; never routed into the console card
+        await _browse_callback(session, notifier, brand, cb, arg, settings)
+        return
     notifier = _card_or_chat(notifier, cb, session, brand)
     if action == "sch":
         await _schedule_callback(session, notifier, brand, cb, arg, settings)
