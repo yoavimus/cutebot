@@ -85,7 +85,7 @@ Pipeline
                         runs a command and rewrites the card in place (Home · Queue N · Pending N /
                         Generate · Stock N · Schedule / Mode · Status · Help — publish from a
                         /queue ▶ row, not the grid). Generate asks 1 · 3 · 5 first.
-/status                 mode header, counts by status, queue depth, stock, learning verdicts, last 5 published
+/status                 mode header, counts by status, queue depth, stock, learning verdicts, 30-day LLM cost, last 5 published
 /queue                  approved posts in order, first 10 rows (+N more) — ▶ Post now / ❌ Drop per row
 /pending [resend]       list undecided suggestions (10 rows, newest first) with a 🔁 Resend newest 5
                         button; "resend" (typed or the button) re-DMs them, older cards stay open
@@ -101,7 +101,8 @@ Settings
 /schedule generate 09:00        daily at, or a raw cron: "0 9 * * 1-5"
 /schedule reset                 back to the env defaults
 /mode [learning|live]   bare /mode shows a confirm keyboard; learning: ✅ = 📚 Keep, slots paused, /postnow refused
-/distill                propose a brand.md revision from recent feedback (✅ Apply / ❌ Discard)
+/distill                propose a brand-text revision from recent feedback (✅ Apply / ❌ Discard)
+/brand                  show the current brand text (typed only, not in the menu)
 /help                   grouped list (also /start)
 (photo DM)              save the photo into the stock library
 ```
@@ -150,11 +151,20 @@ re-renders the card as `✅ Approved (edited)`, and writes a `Feedback` row with
 generation by `app/learning.py`. Published/rejected posts refuse edits. No pending-edit
 state: the post id travels in the prompt text.
 
-**/distill** (M8.4, on demand only): one LLM call reads `brand.md` + the learning context
+**/distill** (M8.4, on demand only): one LLM call reads the brand row's text + the learning context
 (approved posts, edits, reject reasons) and DMs a unified diff + rationale. Nothing is
-written until ✅ Apply (owner-only), which first copies the file to `brand.md.bak`.
-Proposals live in memory — after a restart the buttons answer "expired, run /distill
-again"; Apply also refuses if `brand.md` changed since the proposal.
+written until ✅ Apply (owner-only), which moves the old text to `brand_text_prev` and
+writes the row. Proposals live in memory — after a restart the buttons answer "expired,
+run /distill again"; Apply also refuses if the row's text changed since the proposal.
+
+## Brand text sync (M10)
+
+```bash
+# The DB row is the source of truth; BRAND_FILE (brand.md) only seeds it at first boot.
+python -m scripts.brand_sync push   # BRAND_FILE -> row (old text kept in brand_text_prev)
+python -m scripts.brand_sync pull   # row -> BRAND_FILE, byte-for-byte
+# On Railway run it where BRAND_FILE (/data/brand.md) and DATABASE_URL are set.
+```
 
 ## Model eval (Hebrew quality bake-off)
 

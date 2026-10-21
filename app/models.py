@@ -1,11 +1,12 @@
-"""ORM models — Post, Feedback, Batch. See PRODUCT_SPEC §4."""
+"""ORM models — Brand, Post, Feedback, Batch. See PRODUCT_SPEC §4."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from enum import StrEnum
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -36,16 +37,42 @@ class Decision(StrEnum):
     ALMOST = "almost"
 
 
+class Brand(Base):
+    """A tenant (M10). Every post, batch, feedback, banned image and setting belongs to one.
+
+    ``brand_text`` is the source of truth for the brand guidelines; ``brand.md`` only seeds
+    it (see ``app/brands.py``). ``stock_prefix`` = sub-folder of the stock library.
+    ``brand_id`` columns have no ORM default on purpose: a row written without its brand
+    must fail loudly, not land on brand 1.
+    """
+
+    __tablename__ = "brands"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(128))
+    telegram_chat_id: Mapped[str | None] = mapped_column(String(64), unique=True, default=None)
+    brand_text: Mapped[str] = mapped_column(Text, default="")
+    brand_text_prev: Mapped[str | None] = mapped_column(Text, default=None)
+    stock_prefix: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+
+
 class Batch(Base):
     """Provenance for one generation run."""
 
     __tablename__ = "batches"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    brand_id: Mapped[int] = mapped_column(ForeignKey("brands.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     model: Mapped[str] = mapped_column(String(128))
     size: Mapped[int] = mapped_column()
     brand_snapshot: Mapped[str] = mapped_column(Text, default="")
+    # Sum of its posts' cost; None = no priced usage (stub run or unknown model id).
+    cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(10, 6), default=None)
 
     posts: Mapped[list[Post]] = relationship(back_populates="batch")
 
@@ -56,11 +83,16 @@ class Post(Base):
     __tablename__ = "posts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    brand_id: Mapped[int] = mapped_column(ForeignKey("brands.id"), index=True)
     image_ref: Mapped[str] = mapped_column(Text)
     caption_he: Mapped[str] = mapped_column(Text)
     caption_en: Mapped[str] = mapped_column(Text)
     visual_concept: Mapped[str] = mapped_column(Text)
     rationale: Mapped[str] = mapped_column(Text, default="")
+    # LiteLLM usage of the caption call (M10.3); None when the provider reported none.
+    tokens_in: Mapped[int | None] = mapped_column(default=None)
+    tokens_out: Mapped[int | None] = mapped_column(default=None)
+    cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(10, 6), default=None)
 
     status: Mapped[PostStatus] = mapped_column(String(16), default=PostStatus.SUGGESTED)
     queue_position: Mapped[int | None] = mapped_column(default=None)
@@ -93,6 +125,7 @@ class BannedImage(Base):
 
     __tablename__ = "banned_images"
 
+    brand_id: Mapped[int] = mapped_column(ForeignKey("brands.id"), primary_key=True)
     image_ref: Mapped[str] = mapped_column(Text, primary_key=True)
     banned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
@@ -103,6 +136,7 @@ class Feedback(Base):
     __tablename__ = "feedback"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    brand_id: Mapped[int] = mapped_column(ForeignKey("brands.id"), index=True)
     post_id: Mapped[int] = mapped_column(ForeignKey("posts.id"))
     decision: Mapped[Decision] = mapped_column(String(16))
     reason: Mapped[str | None] = mapped_column(String(32), default=None)
@@ -119,11 +153,12 @@ class Feedback(Base):
 class Setting(Base):
     """Runtime preference (M9): ``mode`` / ``generation_cron`` / ``posting_slots``.
 
-    Plain key/value; no row = the env default (see ``app/prefs.py``). M10 adds ``brand_id``.
+    Key/value per brand; no row = the env default (see ``app/prefs.py``).
     """
 
     __tablename__ = "settings"
 
+    brand_id: Mapped[int] = mapped_column(ForeignKey("brands.id"), primary_key=True)
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(

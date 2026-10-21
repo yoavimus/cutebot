@@ -29,6 +29,7 @@ def _settings(tmp_path: Path) -> Settings:
 def _make_post(tmp_path: Path, name: str = "a.jpg", size: tuple[int, int] = (1080, 1080)) -> Post:
     Image.new("RGB", size, color="red").save(tmp_path / name, format="JPEG")
     return Post(
+        brand_id=1,
         image_ref=name,
         caption_he="שלום",
         caption_en="hello",

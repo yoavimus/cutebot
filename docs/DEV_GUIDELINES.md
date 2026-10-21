@@ -45,10 +45,13 @@ double-post. Only `ok` → `published`; failure → `failed` (re-queueable later
   "Model decision" below). For LLM/API questions, read the `claude-api` skill — don't
   answer model questions from memory.
 - Keep prompts in `app/llm.py` (or a `prompts/` dir if they grow). Brand guidelines
-  are injected verbatim from `brand.md` (`BRAND_FILE`); the learning context from
-  `app/learning.py` is appended after them.
-- `brand.md` is the owner's gitignored live file. Code never writes it except
-  `app/distill.py` after an explicit ✅ in Telegram (with a `.bak` first).
+  are injected verbatim from the brand row (`brands.text(brand)`, the single read); the
+  learning context from `app/learning.py` is appended after them.
+- **Brand text lives in the DB (M10); `brand.md` is only the seed.** Boot copies `BRAND_FILE`
+  into row 1 when the text is empty; after that editing the file does nothing until
+  `scripts/brand_sync.py push`. `app/distill.py` writes the row after an explicit ✅ in
+  Telegram and keeps the old text in `brand_text_prev` (no more `.bak`). Code never writes
+  `brand.md` except `brand_sync.py pull`.
 
 ## Code quality
 

@@ -17,6 +17,7 @@ _S = Settings(learning_examples=3, learning_recent=2, learning_window_days=30)
 def _post(i: int, status: PostStatus) -> Post:
     now = datetime.now(UTC)
     return Post(
+        brand_id=1,
         id=i,
         image_ref=f"{i}.jpg",
         caption_he=f"he{i}",
@@ -29,7 +30,7 @@ def _post(i: int, status: PostStatus) -> Post:
 
 
 async def test_cold_start_is_empty_and_renders_nothing(session: AsyncSession) -> None:
-    ctx = await build_context(session, _S)
+    ctx = await build_context(session, 1, _S)
     assert ctx.is_empty
     assert render(ctx) == ""
     assert "approved_examples" not in _user_prompt("brand", ctx)
@@ -41,6 +42,7 @@ async def test_examples_edited_first_then_newest_and_capped(session: AsyncSessio
     session.add(_post(6, PostStatus.REJECTED))  # never an example
     session.add(
         Feedback(
+            brand_id=1,
             post_id=1,
             decision=Decision.APPROVE,
             edit_lang="he",
@@ -49,7 +51,7 @@ async def test_examples_edited_first_then_newest_and_capped(session: AsyncSessio
         )
     )
     await session.commit()
-    ctx = await build_context(session, _S)
+    ctx = await build_context(session, 1, _S)
     assert [e.caption_he for e in ctx.examples] == ["he1", "he5", "he4"]
     assert [e.edited for e in ctx.examples] == [True, False, False]
     assert [(e.before, e.after) for e in ctx.edits] == [("old", "he1")]
@@ -61,17 +63,21 @@ async def test_hints_only_for_in_window_known_reasons(session: AsyncSession) -> 
     old = datetime.now(UTC) - timedelta(days=60)
     session.add_all(
         [
-            Feedback(post_id=1, decision=Decision.REJECT, reason="hebrew"),
-            Feedback(post_id=1, decision=Decision.REJECT, reason="hebrew"),
-            Feedback(post_id=1, decision=Decision.REJECT, reason="hebrew"),
-            Feedback(post_id=1, decision=Decision.REJECT, reason="boring", created_at=old),
-            Feedback(post_id=1, decision=Decision.REJECT, reason="image"),
-            Feedback(post_id=1, decision=Decision.REJECT, reason="voice"),
-            Feedback(post_id=1, decision=Decision.APPROVE, reason="voice"),  # not a reject
+            Feedback(brand_id=1, post_id=1, decision=Decision.REJECT, reason="hebrew"),
+            Feedback(brand_id=1, post_id=1, decision=Decision.REJECT, reason="hebrew"),
+            Feedback(brand_id=1, post_id=1, decision=Decision.REJECT, reason="hebrew"),
+            Feedback(
+                brand_id=1, post_id=1, decision=Decision.REJECT, reason="boring", created_at=old
+            ),
+            Feedback(brand_id=1, post_id=1, decision=Decision.REJECT, reason="image"),
+            Feedback(brand_id=1, post_id=1, decision=Decision.REJECT, reason="voice"),
+            Feedback(
+                brand_id=1, post_id=1, decision=Decision.APPROVE, reason="voice"
+            ),  # not a reject
         ]
     )
     await session.commit()
-    ctx = await build_context(session, _S)
+    ctx = await build_context(session, 1, _S)
     assert ctx.reject_hints == {"hebrew": 3, "voice": 1}
     out = render(ctx)
     assert "cited repeatedly unnatural Hebrew" in out
@@ -83,7 +89,7 @@ async def test_recent_is_published_only_newest_capped(session: AsyncSession) -> 
     session.add_all(_post(i, PostStatus.PUBLISHED) for i in range(1, 5))
     session.add(_post(5, PostStatus.APPROVED))
     await session.commit()
-    ctx = await build_context(session, _S)
+    ctx = await build_context(session, 1, _S)
     assert ctx.recent == ["he4", "he3"]
     assert "<recent_posts>" in render(ctx)
 
@@ -91,7 +97,7 @@ async def test_recent_is_published_only_newest_capped(session: AsyncSession) -> 
 async def test_disabled_gives_empty_context(session: AsyncSession) -> None:
     session.add(_post(1, PostStatus.PUBLISHED))
     await session.commit()
-    ctx = await build_context(session, _S.model_copy(update={"learning_enabled": False}))
+    ctx = await build_context(session, 1, _S.model_copy(update={"learning_enabled": False}))
     assert ctx == LearningContext()
 
 
@@ -111,15 +117,17 @@ async def test_kept_is_an_example_near_misses_and_retry_pairs(session: AsyncSess
     old = datetime.now(UTC) - timedelta(days=60)
     session.add_all(
         [
-            Feedback(post_id=1, decision=Decision.APPROVE),
-            Feedback(post_id=2, decision=Decision.ALMOST, reason="hebrew"),
-            Feedback(post_id=3, decision=Decision.ALMOST),
-            Feedback(post_id=3, decision=Decision.ALMOST, created_at=old),  # out of window
-            Feedback(post_id=4, decision=Decision.APPROVE),
+            Feedback(brand_id=1, post_id=1, decision=Decision.APPROVE),
+            Feedback(brand_id=1, post_id=2, decision=Decision.ALMOST, reason="hebrew"),
+            Feedback(brand_id=1, post_id=3, decision=Decision.ALMOST),
+            Feedback(
+                brand_id=1, post_id=3, decision=Decision.ALMOST, created_at=old
+            ),  # out of window
+            Feedback(brand_id=1, post_id=4, decision=Decision.APPROVE),
         ]
     )
     await session.commit()
-    ctx = await build_context(session, _S)
+    ctx = await build_context(session, 1, _S)
     assert {e.caption_he for e in ctx.examples} == {"he1", "he4"}
     assert ctx.near_misses == [
         NearMiss(caption_he="he3"),
@@ -130,7 +138,7 @@ async def test_kept_is_an_example_near_misses_and_retry_pairs(session: AsyncSess
     out = render(ctx)
     assert "<near_misses>\n- he3\n- he2  (what was off: hebrew)\n</near_misses>" in out
     assert "before: he2\n  after: he4" in out
-    assert await verdict_counts(session, _S) == {Decision.APPROVE: 2, Decision.ALMOST: 2}
+    assert await verdict_counts(session, 1, _S) == {Decision.APPROVE: 2, Decision.ALMOST: 2}
 
 
 def test_retry_of_block() -> None:

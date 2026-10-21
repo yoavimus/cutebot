@@ -9,7 +9,7 @@ Callback data:
   ``almost:<post_id>``             → 🤏 Almost: show the "What's off?" chips (no ban chip)
   ``almostr:<post_id>:<reason>``   → apply Almost with the chip (or "skip")
   ``retry:<post_id>``              → 🔁 re-caption an Almost'd post's image as a new card
-  ``distill:apply|discard:<token>`` → owner's answer to a /distill brand.md proposal
+  ``distill:apply|discard:<token>`` → owner's answer to a /distill brand-text proposal
   ``fix:<post_id>``                → ForceReply prompt; the owner's reply (``#<id>`` in the
                                      prompt text — stateless) replaces the caption and approves
 
@@ -27,7 +27,7 @@ import json
 import logging
 import re
 import sys
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -36,12 +36,12 @@ import httpx
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import distill, learning, prefs, stock
+from app import brands, distill, learning, prefs, stock
 from app import scheduler as sched
 from app.config import Settings, get_settings
 from app.llm import CaptionError
-from app.models import BannedImage, Decision, Post, PostStatus
-from app.pipeline import review
+from app.models import BannedImage, Brand, Decision, Post, PostStatus
+from app.pipeline import queue, review
 from app.pipeline.review import apply_edit, handle_decision
 from app.render import image_path, render_full_caption
 
@@ -90,6 +90,7 @@ _COMMANDS: list[tuple[str, str, str, str]] = [
     ("Settings", "schedule", "", "[post 12:00,18:00 | generate 09:00 | reset]"),
     ("Settings", "mode", "", "[learning|live] — learning: ✅ = Keep, nothing posts"),
     ("Settings", "distill", "", "— from recent feedback"),
+    ("Settings", "brand", "", "— show the current brand text"),
     ("Settings", "help", "Help", ""),
 ]
 _HELP_CARD = (
@@ -119,14 +120,22 @@ class TelegramNotifier:
     # Set by the app lifespan; None in the polling CLI (prefs still save, jobs apply on boot).
     scheduler: sched.CuteScheduler | None = None
 
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(self, settings: Settings | None = None, chat_id: str | None = None) -> None:
         self._settings = settings or get_settings()
+        # None = the env chat: only the process-wide instance, for boot warnings (M10).
+        self._chat_id = self._settings.telegram_chat_id if chat_id is None else chat_id
+
+    def for_brand(self, brand: Brand) -> TelegramNotifier:
+        """A copy addressed to ``brand``'s owner chat (no chat on the row = sends skipped)."""
+        bound = TelegramNotifier(self._settings, brand.telegram_chat_id or "")
+        bound.scheduler = self.scheduler
+        return bound
 
     def _url(self, method: str) -> str:
         return _API.format(token=self._settings.telegram_bot_token, method=method)
 
     async def send_suggestion(self, post: Post) -> None:
-        if not self._settings.telegram_bot_token or not self._settings.telegram_chat_id:
+        if not self._settings.telegram_bot_token or not self._chat_id:
             logger.warning("Telegram not configured — skipping send for post %s.", post.id)
             return
         caption = render_full_caption(post, self._settings)
@@ -149,7 +158,7 @@ class TelegramNotifier:
                 resp = await client.post(
                     self._url("sendPhoto"),
                     data={
-                        "chat_id": self._settings.telegram_chat_id,
+                        "chat_id": self._chat_id,
                         "caption": caption,
                         "reply_markup": json.dumps(keyboard),
                     },
@@ -160,13 +169,13 @@ class TelegramNotifier:
                 # text with the controls, so the buttons always sit with the full caption.
                 await client.post(
                     self._url("sendPhoto"),
-                    data={"chat_id": self._settings.telegram_chat_id},
+                    data={"chat_id": self._chat_id},
                     files={"photo": photo_path.read_bytes()},
                 )
                 resp = await client.post(
                     self._url("sendMessage"),
                     json={
-                        "chat_id": self._settings.telegram_chat_id,
+                        "chat_id": self._chat_id,
                         "text": caption,
                         "reply_markup": keyboard,
                     },
@@ -187,10 +196,10 @@ class TelegramNotifier:
     ) -> None:
         """DM the owner. ``html=True`` sends ``parse_mode=HTML`` (caller escapes values);
         ``keyboard`` is inline-keyboard rows."""
-        if not self._settings.telegram_bot_token or not self._settings.telegram_chat_id:
+        if not self._settings.telegram_bot_token or not self._chat_id:
             logger.warning("Telegram not configured — skipping send_message.")
             return
-        body: dict[str, Any] = {"chat_id": self._settings.telegram_chat_id, "text": text}
+        body: dict[str, Any] = {"chat_id": self._chat_id, "text": text}
         if html:
             body["parse_mode"] = "HTML"
         if keyboard:
@@ -205,7 +214,7 @@ class TelegramNotifier:
 
     async def send_console(self, text: str, rows: list[list[dict[str, str]]]) -> None:
         """Send the console card (HTML + button grid) and pin it, silently."""
-        chat = self._settings.telegram_chat_id
+        chat = self._chat_id
         body = {
             "chat_id": chat,
             "text": text,
@@ -228,7 +237,7 @@ class TelegramNotifier:
         commands = [
             {"command": cmd, "description": label} for _, cmd, label, _ in _COMMANDS if label
         ]
-        owner = self._settings.telegram_chat_id
+        owner = self._chat_id
         attempts: list[dict[str, Any]] = []
         if owner:
             attempts.append({"scope": {"type": "chat", "chat_id": owner}})
@@ -324,10 +333,10 @@ class TelegramNotifier:
             )
 
     async def send_distill(self, proposal: distill.Proposal) -> None:
-        """DM a brand.md proposal with ✅ Apply / ❌ Discard."""
+        """DM a brand-text proposal with ✅ Apply / ❌ Discard."""
         diff = proposal.diff
         if len(diff) > _DISTILL_DIFF_LIMIT:
-            diff = diff[:_DISTILL_DIFF_LIMIT] + "\n… (diff truncated; Apply writes the full file)"
+            diff = diff[:_DISTILL_DIFF_LIMIT] + "\n… (diff truncated; Apply writes the full text)"
         keyboard = {
             "inline_keyboard": [
                 [
@@ -340,7 +349,7 @@ class TelegramNotifier:
             await client.post(
                 self._url("sendMessage"),
                 json={
-                    "chat_id": self._settings.telegram_chat_id,
+                    "chat_id": self._chat_id,
                     "text": f"{proposal.rationale}\n\n{diff}",
                     "reply_markup": keyboard,
                 },
@@ -408,14 +417,22 @@ def _btn(text: str, data: str) -> dict[str, str]:
     return {"text": text, "callback_data": data}
 
 
-async def _console_counts(session: AsyncSession, settings: Settings) -> dict[str, int]:
+async def _status_counts(session: AsyncSession, brand: Brand) -> dict[PostStatus, int]:
+    rows = await session.execute(
+        select(Post.status, func.count()).where(Post.brand_id == brand.id).group_by(Post.status)
+    )
+    return {r[0]: r[1] for r in rows.all()}
+
+
+async def _console_counts(
+    session: AsyncSession, brand: Brand, settings: Settings
+) -> dict[str, int]:
     """The numbers the grid labels and the home card show: pending, queue, unused stock."""
-    rows = (await session.execute(select(Post.status, func.count()).group_by(Post.status))).all()
-    by: dict[PostStatus, int] = {r[0]: r[1] for r in rows}
+    by = await _status_counts(session, brand)
     return {
         "pending": by.get(PostStatus.SUGGESTED, 0),
         "queue": by.get(PostStatus.APPROVED, 0) + by.get(PostStatus.PUBLISHING, 0),
-        "stock": (await stock.counts(session, settings))["unused"],
+        "stock": (await stock.counts(session, brand, settings))["unused"],
     }
 
 
@@ -443,11 +460,14 @@ class _CardWriter(TelegramNotifier):
     the grid kept underneath. Everything else (cards, toasts) still goes out normally.
     """
 
-    def __init__(self, base: TelegramNotifier, message_id: int, session: AsyncSession) -> None:
-        super().__init__(base._settings)
+    def __init__(
+        self, base: TelegramNotifier, message_id: int, session: AsyncSession, brand: Brand
+    ) -> None:
+        super().__init__(base._settings, base._chat_id)
         self.scheduler = base.scheduler
         self._message_id = message_id
         self._session = session  # for the live counts on the grid labels
+        self._brand = brand
 
     async def send_message(
         self,
@@ -459,9 +479,9 @@ class _CardWriter(TelegramNotifier):
         if keyboard:  # a command with its own buttons gets a sub-menu: its buttons + one way back
             rows = keyboard + _console_rows(back_only=True)
         else:
-            rows = _console_rows(await _console_counts(self._session, self._settings))
+            rows = _console_rows(await _console_counts(self._session, self._brand, self._settings))
         body: dict[str, Any] = {
-            "chat_id": self._settings.telegram_chat_id,
+            "chat_id": self._chat_id,
             "message_id": self._message_id,
             "text": text,
             "reply_markup": {"inline_keyboard": rows},
@@ -476,14 +496,17 @@ class _CardWriter(TelegramNotifier):
             await self.send_message(plain, keyboard=keyboard)
 
 
-def _card_or_chat(notifier: TelegramNotifier, cb: dict, session: AsyncSession) -> TelegramNotifier:
+def _card_or_chat(
+    notifier: TelegramNotifier, cb: dict, session: AsyncSession, brand: Brand
+) -> TelegramNotifier:
     """Taps on the console card edit the card; taps elsewhere (a /queue DM) reply as usual."""
     markup = json.dumps(cb["message"].get("reply_markup") or {})
     if '"con:' not in markup:
         return notifier
-    return _CardWriter(notifier, cb["message"]["message_id"], session)
+    return _CardWriter(notifier, cb["message"]["message_id"], session, brand)
 
 
+_BRAND_SHOW_LIMIT = 3500  # inside Telegram's 4096-char cap, with the <pre> wrapper
 _DISTILL_DIFF_LIMIT = 3000  # keeps rationale + diff inside Telegram's 4096-char message cap
 _EDITABLE = (PostStatus.SUGGESTED, PostStatus.APPROVED)
 _TERMINAL_CB = {PostStatus.PUBLISHING, PostStatus.PUBLISHED, PostStatus.FAILED}
@@ -492,28 +515,30 @@ _TERMINAL_CB = {PostStatus.PUBLISHING, PostStatus.PUBLISHED, PostStatus.FAILED}
 # ─────────────────────────────── status helper ───────────────────────────────
 
 
-async def _build_status_summary(session: AsyncSession, settings: Settings) -> str:
-    rows = (await session.execute(select(Post.status, func.count()).group_by(Post.status))).all()
-    counts: dict[PostStatus, int] = {r[0]: r[1] for r in rows}
+async def _build_status_summary(session: AsyncSession, brand: Brand, settings: Settings) -> str:
+    """The detailed /status view — one function, so new lines (M10.3 cost) land here."""
+    counts = await _status_counts(session, brand)
     recent = (
         await session.scalars(
             select(Post)
-            .where(Post.status == PostStatus.PUBLISHED)
+            .where(Post.brand_id == brand.id, Post.status == PostStatus.PUBLISHED)
             .order_by(Post.published_at.desc())
             .limit(5)
         )
     ).all()
     e = html_lib.escape
     lines = []
-    if await prefs.mode(session) == prefs.LEARNING:
+    if await prefs.mode(session, brand.id) == prefs.LEARNING:
         lines.append("🎓 <b>LEARNING MODE</b> — nothing publishes\n")
     lines.append("<b>Pipeline</b>")
     block = [f"{s:<10} {counts[s]}" for s in PostStatus if counts.get(s, 0)]
     queue_depth = counts.get(PostStatus.APPROVED, 0) + counts.get(PostStatus.PUBLISHING, 0)
     block.append(f"{'queue':<10} {queue_depth}")
     lines.append("<code>" + e("\n".join(block)) + "</code>")
-    lines.append("\n<b>Stock</b>\n" + e(stock.summary_line(await stock.counts(session, settings))))
-    lines.append("\n<b>Learning</b>\n" + e(await _learning_line(session, settings)))
+    c = await stock.counts(session, brand, settings)
+    lines.append("\n<b>Stock</b>\n" + e(stock.summary_line(c)))
+    lines.append("\n<b>Learning</b>\n" + e(await _learning_line(session, brand, settings)))
+    lines.append("\n<b>Cost</b>\n" + e(await _cost_line(session, brand)))
     if recent:
         pub = []
         for p in recent:
@@ -523,12 +548,30 @@ async def _build_status_summary(session: AsyncSession, settings: Settings) -> st
     return "\n".join(lines)
 
 
-async def _learning_line(session: AsyncSession, settings: Settings) -> str:
+_COST_DAYS = 30
+
+
+async def _cost_line(session: AsyncSession, brand: Brand) -> str:
+    """LLM spend on this brand's captions over the last 30 days (posts with a priced usage)."""
+    since = datetime.now(UTC) - timedelta(days=_COST_DAYS)
+    total, n = (
+        await session.execute(
+            select(func.sum(Post.cost_usd), func.count(Post.cost_usd)).where(
+                Post.brand_id == brand.id, Post.created_at >= since
+            )
+        )
+    ).one()
+    if not n:
+        return f"cost: no priced posts in the last {_COST_DAYS}d"
+    return f"cost: ${float(total):.2f} over {n} posts (last {_COST_DAYS}d)"
+
+
+async def _learning_line(session: AsyncSession, brand: Brand, settings: Settings) -> str:
     """The /status learning line — the verdict counts that tell the owner when to go live."""
     if not settings.learning_enabled:
         return "learning: off"
-    n = await learning.verdict_counts(session, settings)
-    ctx = await learning.build_context(session, settings)
+    n = await learning.verdict_counts(session, brand.id, settings)
+    ctx = await learning.build_context(session, brand.id, settings)
     return (
         f"learning: {n.get(Decision.APPROVE, 0)} ✅ · {n.get(Decision.ALMOST, 0)} 🤏 · "
         f"{n.get(Decision.REJECT, 0)} ❌ (last {settings.learning_window_days}d)\n"
@@ -540,18 +583,18 @@ async def _learning_line(session: AsyncSession, settings: Settings) -> str:
 
 
 async def _cmd_status(
-    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, args: str, settings: Settings
 ) -> None:
-    await notifier.send_message(await _build_status_summary(session, settings), html=True)
+    await notifier.send_message(await _build_status_summary(session, brand, settings), html=True)
 
 
 async def _build_home(
-    session: AsyncSession, notifier: TelegramNotifier, settings: Settings
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, settings: Settings
 ) -> str:
     """The card's default body: what needs the owner, not the raw status dump."""
-    c = await _console_counts(session, settings)
+    c = await _console_counts(session, brand, settings)
     e = html_lib.escape
-    learning = await prefs.mode(session) == prefs.LEARNING
+    learning = await prefs.mode(session, brand.id) == prefs.LEARNING
     lines = [
         "🎓 <b>Learning mode</b> — nothing publishes" if learning else "🚀 <b>Live</b>",
     ]
@@ -563,27 +606,29 @@ async def _build_home(
     queued = f"📬 {c['queue']} queued"
     lines.append(f"{queued} · next post {_fmt_next(nxt)}" if nxt else queued)
     lines.append(f"📷 {c['stock']} unused photos")
-    lines.append("📚 " + e((await _learning_line(session, settings)).split("\n")[0]))
+    lines.append("📚 " + e((await _learning_line(session, brand, settings)).split("\n")[0]))
     now = datetime.now(ZoneInfo(settings.schedule_tz)).strftime("%H:%M")
     lines.append(f"<i>updated {now}</i>")
     return "\n".join(lines)
 
 
 async def _cmd_console(
-    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, args: str, settings: Settings
 ) -> None:
-    text = await _build_home(session, notifier, settings)
-    await notifier.send_console(text, _console_rows(await _console_counts(session, settings)))
+    text = await _build_home(session, notifier, brand, settings)
+    await notifier.send_console(
+        text, _console_rows(await _console_counts(session, brand, settings))
+    )
 
 
 async def _cmd_home(
-    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, args: str, settings: Settings
 ) -> None:
-    await notifier.send_message(await _build_home(session, notifier, settings), html=True)
+    await notifier.send_message(await _build_home(session, notifier, brand, settings), html=True)
 
 
 async def _cmd_help(
-    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, args: str, settings: Settings
 ) -> None:
     e = html_lib.escape
     lines = ["<b>Review a card</b>", e(_HELP_CARD)]
@@ -595,11 +640,11 @@ async def _cmd_help(
 
 
 async def _cmd_stock(
-    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, args: str, settings: Settings
 ) -> None:
     sub, _, ref = args.partition(" ")
     if sub == "unban":
-        if await stock.unban_image(session, ref.strip()):
+        if await stock.unban_image(session, brand.id, ref.strip()):
             await session.commit()
             await notifier.send_message(f"{ref.strip()} is back in the pool.")
         else:
@@ -607,9 +652,13 @@ async def _cmd_stock(
                 f"{ref.strip() or '<file>'} is not banned. Usage: /stock unban <file>"
             )
         return
-    c = await stock.counts(session, settings)
+    c = await stock.counts(session, brand, settings)
     banned = (
-        await session.scalars(select(BannedImage.image_ref).order_by(BannedImage.image_ref))
+        await session.scalars(
+            select(BannedImage.image_ref)
+            .where(BannedImage.brand_id == brand.id)
+            .order_by(BannedImage.image_ref)
+        )
     ).all()
     e = html_lib.escape
     lines = [e(stock.summary_line(c))]
@@ -628,7 +677,7 @@ async def _cmd_stock(
 
 
 async def _cmd_generate(
-    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, args: str, settings: Settings
 ) -> None:
     from app.pipeline import generate
     from app.pipeline import review as _rev
@@ -638,23 +687,23 @@ async def _cmd_generate(
         await notifier.send_message(f"Capped at {_GENERATE_MAX} per /generate.")
         n = _GENERATE_MAX
     n = max(n, 1)
-    posts = await generate.generate_batch(session, n=n)
+    posts = await generate.generate_batch(session, brand, n=n)
     await _rev.send_for_review(posts, notifier)
     await notifier.send_message(f"Generated {len(posts)} post(s) — check your review DMs.")
-    if warning := await stock.low_stock_message(session, settings, len(posts), n):
+    if warning := await stock.low_stock_message(session, brand, settings, len(posts), n):
         await notifier.send_message(warning)
 
 
 async def _cmd_postnow(
-    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, args: str, settings: Settings
 ) -> None:
     from app.pipeline import publish
 
-    if await prefs.mode(session) == prefs.LEARNING:
+    if await prefs.mode(session, brand.id) == prefs.LEARNING:
         await notifier.send_message("Learning mode — /mode live to publish.")
         return
     if args.isdigit():
-        post = await publish.publish_by_id(session, int(args))
+        post = await publish.publish_by_id(session, brand.id, int(args))
         if post is None:
             await notifier.send_message(f"Post #{args} not found.")
         elif post.status == PostStatus.PUBLISHED:
@@ -668,7 +717,7 @@ async def _cmd_postnow(
         else:
             await notifier.send_message(f"Post #{post.id} is {post.status}, not approved.")
     else:
-        post = await publish.publish_next(session)
+        post = await publish.publish_next(session, brand.id)
         if post is None:
             await notifier.send_message("Queue is empty — nothing to publish.")
         elif post.status == PostStatus.PUBLISHED:
@@ -682,9 +731,9 @@ def _tick(on: bool) -> str:
 
 
 async def _cmd_mode(
-    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, args: str, settings: Settings
 ) -> None:
-    current = await prefs.mode(session)
+    current = await prefs.mode(session, brand.id)
     want = args.lower().strip()
     if not want:  # confirmation keyboard: mode must not flip by accident
         await notifier.send_message(
@@ -701,18 +750,18 @@ async def _cmd_mode(
     if want not in (prefs.LIVE, prefs.LEARNING):
         await notifier.send_message("Usage: /mode learning | /mode live")
         return
-    await _set_mode(session, notifier, want)
+    await _set_mode(session, notifier, brand, want)
 
 
-async def _set_mode(session: AsyncSession, notifier: TelegramNotifier, want: str) -> None:
-    await prefs.set(session, prefs.MODE, want)
+async def _set_mode(
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, want: str
+) -> None:
+    await prefs.set(session, brand.id, prefs.MODE, want)
     scheduler = notifier.scheduler
     if scheduler is not None:
         sched.apply_mode(scheduler, want)
     if want == prefs.LEARNING:
-        n = await session.scalar(
-            select(func.count()).select_from(Post).where(Post.status == PostStatus.APPROVED)
-        )
+        n = await queue.queue_length(session, brand.id)
         queued = f" {n} queued post(s) stay queued." if n else ""
         await notifier.send_message(
             "🎓 Learning mode — ✅ now means 📚 Keep, posting slots paused, "
@@ -758,10 +807,10 @@ def _hour_grid(what: str) -> list[list[dict[str, str]]]:
 
 
 async def _schedule_view(
-    session: AsyncSession, notifier: TelegramNotifier, settings: Settings
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, settings: Settings
 ) -> tuple[str, list[list[dict[str, str]]]]:
-    cron = await prefs.generation_cron(session, settings)
-    slots = await prefs.posting_slots(session, settings)
+    cron = await prefs.generation_cron(session, brand.id, settings)
+    slots = await prefs.posting_slots(session, brand.id, settings)
     lines = [f"Schedule ({settings.schedule_tz})", f"generate: {cron}"]
     runs = sched.next_runs(notifier.scheduler) if notifier.scheduler is not None else {}
     if "generation" in runs:
@@ -771,22 +820,22 @@ async def _schedule_view(
         job_id = f"posting-{hh:02d}{mm:02d}"
         if job_id in runs:
             lines.append(f"  {hh:02d}:{mm:02d} next: {_fmt_next(runs[job_id])}")
-    if await prefs.mode(session) == prefs.LEARNING:
+    if await prefs.mode(session, brand.id) == prefs.LEARNING:
         lines.append("🎓 learning mode — slots are paused")
     return "\n".join(lines), _schedule_keyboard(slots, cron)
 
 
 async def _cmd_schedule(
-    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, args: str, settings: Settings
 ) -> None:
     sub, _, rest = args.partition(" ")
     sub, rest = sub.lower(), rest.strip()
     scheduler = notifier.scheduler
     tz = settings.schedule_tz
-    paused = await prefs.mode(session) == prefs.LEARNING
+    paused = await prefs.mode(session, brand.id) == prefs.LEARNING
 
     if sub == "":
-        text, keyboard = await _schedule_view(session, notifier, settings)
+        text, keyboard = await _schedule_view(session, notifier, brand, settings)
         await notifier.send_message(text, keyboard=keyboard)
         return
     if sub == "post":
@@ -795,7 +844,7 @@ async def _cmd_schedule(
         except ValueError as exc:
             await notifier.send_message(f"{exc}\n{_SCHEDULE_USAGE}")
             return
-        await prefs.set(session, prefs.POSTING_SLOTS, prefs.format_slots(slots))
+        await prefs.set(session, brand.id, prefs.POSTING_SLOTS, prefs.format_slots(slots))
         if scheduler is not None:
             sched.apply_slots(scheduler, slots, tz, paused=paused)
     elif sub == "generate":
@@ -804,29 +853,34 @@ async def _cmd_schedule(
         except ValueError:
             await notifier.send_message(f"Bad time or cron.\n{_SCHEDULE_USAGE}")
             return
-        await prefs.set(session, prefs.GENERATION_CRON, cron)
+        await prefs.set(session, brand.id, prefs.GENERATION_CRON, cron)
         if scheduler is not None:
             sched.reschedule_generation(scheduler, cron, tz)
     elif sub == "reset":
-        await prefs.delete(session, prefs.POSTING_SLOTS)
-        await prefs.delete(session, prefs.GENERATION_CRON)
+        await prefs.delete(session, brand.id, prefs.POSTING_SLOTS)
+        await prefs.delete(session, brand.id, prefs.GENERATION_CRON)
         if scheduler is not None:
             sched.apply_slots(scheduler, settings.posting_slots_list, tz, paused=paused)
             sched.reschedule_generation(scheduler, settings.generation_cron, tz)
     else:
         await notifier.send_message(_SCHEDULE_USAGE)
         return
-    text, keyboard = await _schedule_view(session, notifier, settings)
+    text, keyboard = await _schedule_view(session, notifier, brand, settings)
     await notifier.send_message(text, keyboard=keyboard)
 
 
 async def _schedule_callback(
-    session: AsyncSession, notifier: TelegramNotifier, cb: dict, arg: str, settings: Settings
+    session: AsyncSession,
+    notifier: TelegramNotifier,
+    brand: Brand,
+    cb: dict,
+    arg: str,
+    settings: Settings,
 ) -> None:
     """``sch:view`` / ``sch:pick:add|gen`` / ``sch:add:H`` / ``sch:del:HHMM`` / ``sch:gen:H`` /
     ``sch:reset`` — every edit is replayed through ``_cmd_schedule`` so one path applies it."""
     what, _, val = arg.partition(":")
-    slots = await prefs.posting_slots(session, settings)
+    slots = await prefs.posting_slots(session, brand.id, settings)
     args, toast = "", ""
     if what == "pick" and val in ("add", "gen"):
         title = "Add a posting slot:" if val == "add" else "Generate daily at:"
@@ -852,16 +906,16 @@ async def _schedule_callback(
     elif what != "view":
         return
     await notifier.answer_callback(cb["id"], toast)
-    await _cmd_schedule(session, notifier, args, settings)
+    await _cmd_schedule(session, notifier, brand, args, settings)
 
 
 async def _cmd_queue(
-    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, args: str, settings: Settings
 ) -> None:
     posts = (
         await session.scalars(
             select(Post)
-            .where(Post.status == PostStatus.APPROVED)
+            .where(Post.brand_id == brand.id, Post.status == PostStatus.APPROVED)
             .order_by(Post.queue_position.asc())
         )
     ).all()
@@ -883,14 +937,12 @@ async def _cmd_queue(
 
 
 async def _cmd_requeue(
-    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, args: str, settings: Settings
 ) -> None:
-    from app.pipeline import queue
-
     if not args.isdigit():
         await notifier.send_message("Usage: /requeue <id>")
         return
-    post = await session.get(Post, int(args))
+    post = await review.own_post(session, brand.id, int(args))
     if post is None:
         await notifier.send_message(f"Post #{args} not found.")
         return
@@ -903,15 +955,17 @@ async def _cmd_requeue(
 
 
 async def _cmd_pending(
-    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, args: str, settings: Settings
 ) -> None:
     """List what awaits review; resend only on request (``/pending resend`` or the button)."""
     if args.strip().lower() == "resend":
-        await _resend_pending(session, notifier)
+        await _resend_pending(session, notifier, brand)
         return
     posts = (
         await session.scalars(
-            select(Post).where(Post.status == PostStatus.SUGGESTED).order_by(Post.id.desc())
+            select(Post)
+            .where(Post.brand_id == brand.id, Post.status == PostStatus.SUGGESTED)
+            .order_by(Post.id.desc())
         )
     ).all()
     if not posts:
@@ -930,21 +984,17 @@ async def _cmd_pending(
     )
 
 
-async def _resend_pending(session: AsyncSession, notifier: TelegramNotifier) -> None:
+async def _resend_pending(session: AsyncSession, notifier: TelegramNotifier, brand: Brand) -> None:
     from app.pipeline import review as _rev
 
-    total = await session.scalar(
-        select(func.count()).select_from(Post).where(Post.status == PostStatus.SUGGESTED)
-    )
+    pending = (Post.brand_id == brand.id, Post.status == PostStatus.SUGGESTED)
+    total = await session.scalar(select(func.count()).select_from(Post).where(*pending))
     if not total:
         await notifier.send_message("No pending posts.")
         return
     latest = (
         await session.scalars(
-            select(Post)
-            .where(Post.status == PostStatus.SUGGESTED)
-            .order_by(Post.id.desc())
-            .limit(_PENDING_RESEND)
+            select(Post).where(*pending).order_by(Post.id.desc()).limit(_PENDING_RESEND)
         )
     ).all()
     tail = f" — resending the latest {len(latest)}…" if total > len(latest) else " — resending…"
@@ -953,10 +1003,10 @@ async def _resend_pending(session: AsyncSession, notifier: TelegramNotifier) -> 
 
 
 async def _cmd_distill(
-    session: AsyncSession, notifier: TelegramNotifier, args: str, settings: Settings
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, args: str, settings: Settings
 ) -> None:
     try:
-        result = await distill.propose(session, settings)
+        result = await distill.propose(session, settings, brand)
     except CaptionError as exc:
         await notifier.send_message(f"Distill failed: {exc}")
         return
@@ -964,6 +1014,16 @@ async def _cmd_distill(
         await notifier.send_message(result)
     else:
         await notifier.send_distill(result)
+
+
+async def _cmd_brand(
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, args: str, settings: Settings
+) -> None:
+    text = brands.text(brand)
+    if len(text) > _BRAND_SHOW_LIMIT:
+        text = text[:_BRAND_SHOW_LIMIT] + "\n… (truncated; brand_sync.py pull gives the full text)"
+    body = f"<b>Brand text</b>\n<pre>{html_lib.escape(text)}</pre>"
+    await notifier.send_message(body, html=True)
 
 
 _HANDLERS: dict[str, Any] = {
@@ -979,6 +1039,7 @@ _HANDLERS: dict[str, Any] = {
     "/schedule": _cmd_schedule,
     "/mode": _cmd_mode,
     "/distill": _cmd_distill,
+    "/brand": _cmd_brand,
     "/help": _cmd_help,
     "/start": _cmd_help,
 }
@@ -987,7 +1048,9 @@ _HANDLERS: dict[str, Any] = {
 # ─────────────────────────────── photo upload ────────────────────────────────
 
 
-async def _handle_photo_upload(notifier: TelegramNotifier, msg: dict, settings: Settings) -> None:
+async def _handle_photo_upload(
+    notifier: TelegramNotifier, brand: Brand, msg: dict, settings: Settings
+) -> None:
     photo = msg.get("photo", [])
     if not photo:
         return
@@ -1003,7 +1066,7 @@ async def _handle_photo_upload(notifier: TelegramNotifier, msg: dict, settings: 
         dl_url = f"https://api.telegram.org/file/bot{settings.telegram_bot_token}/{file_path}"
         img_resp = await client.get(dl_url)
 
-    stock_dir = Path(settings.stock_images_dir)
+    stock_dir = stock.brand_dir(settings, brand.stock_prefix)
     stock_dir.mkdir(parents=True, exist_ok=True)
     filename = Path(file_path).name
     dest = stock_dir / filename
@@ -1016,7 +1079,7 @@ async def _handle_photo_upload(notifier: TelegramNotifier, msg: dict, settings: 
 
 
 async def _maybe_apply_edit(
-    session: AsyncSession, notifier: TelegramNotifier, msg: dict, text: str
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, msg: dict, text: str
 ) -> bool:
     """If ``msg`` replies to our ✏️ Fix prompt, apply the edit. Returns True when handled."""
     prompt = msg.get("reply_to_message") or {}
@@ -1031,9 +1094,9 @@ async def _maybe_apply_edit(
     if not text:
         await notifier.send_message("Empty caption — nothing changed.")
         return True
-    pre = await session.get(Post, post_id)
+    pre = await review.own_post(session, brand.id, post_id)
     pre_state = (pre.status, pre.caption_he, pre.caption_en) if pre else None
-    post = await apply_edit(session, post_id, lang, text)
+    post = await apply_edit(session, brand.id, post_id, lang, text)
     if post is None:
         await notifier.send_message(f"Post #{post_id} not found.")
     elif pre_state == (post.status, post.caption_he, post.caption_en):
@@ -1049,26 +1112,30 @@ async def _maybe_apply_edit(
 async def process_message(
     session: AsyncSession, notifier: TelegramNotifier, msg: dict, settings: Settings
 ) -> None:
-    """Route an incoming plain message. Owner-gated commands and photo uploads are handled."""
-    chat_id = str(msg.get("chat", {}).get("id", ""))
-    is_owner = chat_id == str(settings.telegram_chat_id)
+    """Route an incoming message from a brand's owner chat: ✏️ Fix replies, commands, photos.
+
+    The chat resolves to its brand; any other chat is ignored.
+    """
+    chat_id = msg.get("chat", {}).get("id")
+    brand = await brands.by_chat_id(session, chat_id)
+    if brand is None:
+        logger.warning("Ignoring message from unknown chat %s.", chat_id)
+        return
+    notifier = notifier.for_brand(brand)
 
     text = (msg.get("text") or "").strip()
-    if is_owner and text and await _maybe_apply_edit(session, notifier, msg, text):
+    if text and await _maybe_apply_edit(session, notifier, brand, msg, text):
         return
     if text.startswith("/"):
-        if not is_owner:
-            logger.warning("Ignoring command from non-owner chat %s.", chat_id)
-            return
         cmd, _, args = text.partition(" ")
         cmd = cmd.split("@")[0].lower()
         handler = _HANDLERS.get(cmd)
         if handler:
-            await handler(session, notifier, args.strip(), settings)
+            await handler(session, notifier, brand, args.strip(), settings)
         return
 
-    if msg.get("photo") and is_owner:
-        await _handle_photo_upload(notifier, msg, settings)
+    if msg.get("photo"):
+        await _handle_photo_upload(notifier, brand, msg, settings)
 
 
 # ─────────────────────────────── callback handler ────────────────────────────
@@ -1080,19 +1147,26 @@ async def process_callback(
     cb: dict,
     settings: Settings | None = None,
 ) -> None:
-    """Route a Telegram callback: approve/keep, two-step reject/almost, retry, fix, distill."""
-    data = cb.get("data", "")
+    """Route a Telegram callback: approve/keep, two-step reject/almost, retry, fix, distill.
 
-    # ── /distill proposal: the only callback that writes a file, so owner-gated ──
+    The card's chat resolves to its brand; a tap from any other chat is ignored, and a post
+    of another brand is "not found".
+    """
+    data = cb.get("data", "")
+    settings = settings or get_settings()
+    chat_id = (cb.get("message") or {}).get("chat", {}).get("id")
+    brand = await brands.by_chat_id(session, chat_id)
+    if brand is None:
+        logger.warning("Ignoring callback from unknown chat %s.", chat_id)
+        return
+    notifier = notifier.for_brand(brand)
+
+    # ── /distill proposal ──
     if data.startswith("distill:"):
-        settings = settings or get_settings()
         _, _, rest = data.partition(":")
         action, _, token = rest.partition(":")
-        if str(cb["message"]["chat"]["id"]) != str(settings.telegram_chat_id):
-            logger.warning("Ignoring distill callback from non-owner chat.")
-            return
         if action == "apply":
-            label = distill.apply(token, settings)
+            label = await distill.apply(session, brand, token)
         elif action == "discard":
             label = distill.discard(token)
         else:
@@ -1103,7 +1177,7 @@ async def process_callback(
 
     # ── console buttons (/queue, /stock, /mode): state-changing, so owner-gated ──
     if data.startswith(("con:", "gen:", "pend:", "sch:", "postnow:", "drop:", "unban:", "mode:")):
-        await _console_callback(session, notifier, cb, settings or get_settings())
+        await _console_callback(session, notifier, brand, cb, settings)
         return
 
     # ── Step 1: ❌ / 🤏 tap → show reason picker ─────────────────────────────
@@ -1112,7 +1186,7 @@ async def process_callback(
         if not raw_id.isdigit():
             return
         post_id = int(raw_id)
-        post = await session.get(Post, post_id)
+        post = await review.own_post(session, brand.id, post_id)
         if post is None:
             await notifier.answer_callback(cb["id"], "Post not found")
             return
@@ -1137,10 +1211,10 @@ async def process_callback(
         if almost and reason == _BAN_REASON:
             return  # never offered on Almost; a forged chip must not ban anything
 
-        pre = await session.get(Post, post_id)
+        pre = await review.own_post(session, brand.id, post_id)
         pre_status = pre.status if pre is not None else None
         decision = "almost" if almost else "reject"
-        post = await handle_decision(session, post_id, decision, reason=reason)
+        post = await handle_decision(session, brand.id, post_id, decision, reason=reason)
 
         if post is None:
             await notifier.answer_callback(cb["id"], "Post not found")
@@ -1153,7 +1227,7 @@ async def process_callback(
             toast = "🤏 Almost" if almost else "❌ Rejected"
             toast += f" ({reason_str})" if reason else ""
         if reason == _BAN_REASON and post.status == PostStatus.REJECTED:
-            await stock.ban_image(session, post.image_ref)
+            await stock.ban_image(session, brand.id, post.image_ref)
             await session.commit()
             toast = "❌ Rejected · 🚫 image banned"
 
@@ -1173,7 +1247,7 @@ async def process_callback(
     # ── ✏️ Fix: ask for the corrected caption ────────────────────────────────
     if data.startswith("fix:"):
         raw_id = data.removeprefix("fix:")
-        post = await session.get(Post, int(raw_id)) if raw_id.isdigit() else None
+        post = await review.own_post(session, brand.id, int(raw_id)) if raw_id.isdigit() else None
         if post is None:
             await notifier.answer_callback(cb["id"], "Post not found")
         elif post.status not in _EDITABLE:
@@ -1189,13 +1263,13 @@ async def process_callback(
         if not raw_id.isdigit():
             return
         post_id = int(raw_id)
-        if (done := await review.retry_child(session, post_id)) is not None:
+        if (done := await review.retry_child(session, brand.id, post_id)) is not None:
             await notifier.answer_callback(cb["id"], f"Already retried → #{done.id}")
             await notifier.mark_retried(cb["message"], done.id)
             return
         await notifier.answer_callback(cb["id"], "🔁 Generating a retry…")
         try:
-            new = await review.retry(session, post_id, settings or get_settings())
+            new = await review.retry(session, brand, post_id, settings)
         except CaptionError as exc:
             await notifier.send_message(f"Retry of #{post_id} failed: {exc}")
             return
@@ -1213,9 +1287,9 @@ async def process_callback(
     if not parsed:
         return
     decision, post_id = parsed
-    pre = await session.get(Post, post_id)
+    pre = await review.own_post(session, brand.id, post_id)
     pre_status = pre.status if pre is not None else None
-    post = await handle_decision(session, post_id, decision)
+    post = await handle_decision(session, brand.id, post_id, decision)
 
     if post is None:
         toast = "Post not found"
@@ -1245,16 +1319,13 @@ async def process_callback(
 
 
 async def _console_callback(
-    session: AsyncSession, notifier: TelegramNotifier, cb: dict, settings: Settings
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, cb: dict, settings: Settings
 ) -> None:
     """``con:<cmd>`` / ``postnow:<id>`` / ``drop:<id>`` / ``unban:<ref>`` / ``mode:<…>``."""
-    if str(cb["message"]["chat"]["id"]) != str(settings.telegram_chat_id):
-        logger.warning("Ignoring console callback from non-owner chat.")
-        return
     action, _, arg = cb.get("data", "").partition(":")
-    notifier = _card_or_chat(notifier, cb, session)
+    notifier = _card_or_chat(notifier, cb, session, brand)
     if action == "sch":
-        await _schedule_callback(session, notifier, cb, arg, settings)
+        await _schedule_callback(session, notifier, brand, cb, arg, settings)
     elif action == "con" and arg == "generate":
         await notifier.answer_callback(cb["id"], _TOASTS["generate"])
         await notifier.send_message(
@@ -1264,21 +1335,21 @@ async def _console_callback(
         handler = _HANDLERS.get(f"/{arg}") if arg != "console" else None
         if handler is not None:
             await notifier.answer_callback(cb["id"], _TOASTS.get(arg, f"{arg.capitalize()}…"))
-            await handler(session, notifier, "", settings)
+            await handler(session, notifier, brand, "", settings)
     elif action == "gen" and arg.isdigit():
         await notifier.answer_callback(cb["id"], f"⏳ Drafting {arg}…")
         await notifier.send_message(f"⏳ Drafting {arg} post(s)… cards arrive below.")
-        await _cmd_generate(session, notifier, arg, settings)
+        await _cmd_generate(session, notifier, brand, arg, settings)
     elif action == "pend" and arg == "resend":
         await notifier.answer_callback(cb["id"], "⏳ Resending…")
         await notifier.send_message("⏳ Resending the newest cards…")
-        await _resend_pending(session, notifier)
+        await _resend_pending(session, notifier, brand)
     elif action == "postnow" and arg.isdigit():
         await notifier.answer_callback(cb["id"], f"▶ Publishing #{arg}…")
-        await _cmd_postnow(session, notifier, arg, settings)
+        await _cmd_postnow(session, notifier, brand, arg, settings)
     elif action == "drop" and arg.isdigit():
-        pre = await session.get(Post, int(arg))
-        post = await handle_decision(session, int(arg), "reject")
+        pre = await review.own_post(session, brand.id, int(arg))
+        post = await handle_decision(session, brand.id, int(arg), "reject")
         if post is None:
             toast = "Post not found"
         elif pre is not None and pre.status in _TERMINAL_CB:
@@ -1286,14 +1357,14 @@ async def _console_callback(
         else:
             toast = f"❌ Dropped #{post.id}"
         await notifier.answer_callback(cb["id"], toast)
-        await _cmd_queue(session, notifier, "", settings)  # the list is stale now
+        await _cmd_queue(session, notifier, brand, "", settings)  # the list is stale now
     elif action == "unban" and arg:
-        ok = await stock.unban_image(session, arg)
+        ok = await stock.unban_image(session, brand.id, arg)
         await session.commit()
         await notifier.answer_callback(cb["id"], "♻️ Back in the pool" if ok else "Not banned")
     elif action == "mode" and arg in (prefs.LEARNING, prefs.LIVE):
         await notifier.answer_callback(cb["id"], f"Mode → {arg}")
-        await _set_mode(session, notifier, arg)
+        await _set_mode(session, notifier, brand, arg)
     elif action == "mode" and arg == "cancel":
         await notifier.answer_callback(cb["id"], "Cancelled")
 

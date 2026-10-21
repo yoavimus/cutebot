@@ -158,6 +158,16 @@ async def _complete(
     )
 
 
+def cost_usd(model: str, tokens_in: int | None, tokens_out: int | None) -> float | None:
+    """Cost of one call from LiteLLM's bundled price table; None if usage or price is unknown."""
+    import litellm
+
+    price = litellm.model_cost.get(model.split("@")[0].split("/", 1)[-1])
+    if not price or tokens_in is None or tokens_out is None:
+        return None
+    return tokens_in * price["input_cost_per_token"] + tokens_out * price["output_cost_per_token"]
+
+
 async def caption_image(
     brand: str,
     image_path: Path,
@@ -194,7 +204,7 @@ async def caption_image(
         logger.error("LLM returned invalid response for %s: %.200s", image_path.name, content)
         raise CaptionError(str(exc)) from exc
     usage = getattr(response, "usage", None)
-    if usage is not None:  # for the eval's cost column; never stored on the post
+    if usage is not None:  # stored on the post by generate_batch
         sug.tokens_in = getattr(usage, "prompt_tokens", None)
         sug.tokens_out = getattr(usage, "completion_tokens", None)
     return sug

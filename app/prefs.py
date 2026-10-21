@@ -1,7 +1,8 @@
 """Runtime preferences — DB row wins, env (``Settings``) is the default (M9.2).
 
-No cache: one indexed read per command/tick. ``mode(session)`` is the single read used by
-review, publish and status. Reads raise on a DB error — boot decides how to fail closed.
+Per brand (M10): every function takes ``brand_id``. No cache: one indexed read per
+command/tick. ``mode(session, brand_id)`` is the single read used by review, publish and
+status. Reads raise on a DB error — boot decides how to fail closed.
 """
 
 from __future__ import annotations
@@ -28,30 +29,32 @@ _SLOT = re.compile(r"^(\d{1,2}):(\d{2})$")
 MAX_SLOTS = 6
 
 
-async def get(session: AsyncSession, key: str, default: str | None = None) -> str | None:
-    row = await session.get(Setting, key)
+async def get(
+    session: AsyncSession, brand_id: int, key: str, default: str | None = None
+) -> str | None:
+    row = await session.get(Setting, (brand_id, key))
     return row.value if row is not None else default
 
 
-async def set(session: AsyncSession, key: str, value: str) -> None:  # noqa: A001
-    row = await session.get(Setting, key)
+async def set(session: AsyncSession, brand_id: int, key: str, value: str) -> None:  # noqa: A001
+    row = await session.get(Setting, (brand_id, key))
     if row is None:
-        session.add(Setting(key=key, value=value))
+        session.add(Setting(brand_id=brand_id, key=key, value=value))
     else:
         row.value = value
     await session.commit()
 
 
-async def delete(session: AsyncSession, key: str) -> None:
-    row = await session.get(Setting, key)
+async def delete(session: AsyncSession, brand_id: int, key: str) -> None:
+    row = await session.get(Setting, (brand_id, key))
     if row is not None:
         await session.delete(row)
         await session.commit()
 
 
-async def mode(session: AsyncSession) -> str:
+async def mode(session: AsyncSession, brand_id: int) -> str:
     """``live`` (default) or ``learning``. Any unrecognised stored value fails closed."""
-    value = await get(session, MODE, LIVE)
+    value = await get(session, brand_id, MODE, LIVE)
     if value == LIVE:
         return LIVE
     if value != LEARNING:
@@ -59,9 +62,11 @@ async def mode(session: AsyncSession) -> str:
     return LEARNING
 
 
-async def generation_cron(session: AsyncSession, settings: Settings | None = None) -> str:
+async def generation_cron(
+    session: AsyncSession, brand_id: int, settings: Settings | None = None
+) -> str:
     settings = settings or get_settings()
-    stored = await get(session, GENERATION_CRON)
+    stored = await get(session, brand_id, GENERATION_CRON)
     if stored is None:
         return settings.generation_cron
     try:
@@ -73,10 +78,10 @@ async def generation_cron(session: AsyncSession, settings: Settings | None = Non
 
 
 async def posting_slots(
-    session: AsyncSession, settings: Settings | None = None
+    session: AsyncSession, brand_id: int, settings: Settings | None = None
 ) -> list[tuple[int, int]]:
     settings = settings or get_settings()
-    stored = await get(session, POSTING_SLOTS)
+    stored = await get(session, brand_id, POSTING_SLOTS)
     if stored is None:
         return settings.posting_slots_list
     try:

@@ -2,7 +2,9 @@
 
 Cron and slots come from ``app.prefs`` (DB row, else env) so the owner can change them
 from the bot; ``apply_slots`` / ``apply_mode`` / ``reschedule_generation`` mutate the
-running scheduler in place — no restart.
+running scheduler in place — no restart. ponytail: one process-wide schedule (brand 1's
+prefs) until M13; each tick loops over every brand, and each brand's own mode still gates
+its publishing at the doors (``publish_next``).
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app import prefs, stock
+from app import brands, prefs, stock
 from app.config import Settings
 from app.notifier.base import Notifier
 from app.pipeline import generate, publish, review
@@ -48,10 +50,11 @@ async def load_schedule(
     """Read mode/cron/slots from prefs. **Fails closed**: any error → learning mode + env."""
     try:
         async with sessionmaker() as session:
+            brand_id = (await brands.default(session)).id
             return Schedule(
-                mode=await prefs.mode(session),
-                generation_cron=await prefs.generation_cron(session, settings),
-                slots=await prefs.posting_slots(session, settings),
+                mode=await prefs.mode(session, brand_id),
+                generation_cron=await prefs.generation_cron(session, brand_id, settings),
+                slots=await prefs.posting_slots(session, brand_id, settings),
             )
     except Exception:
         logger.exception("Could not read settings — starting in LEARNING mode (fail closed).")
@@ -127,17 +130,30 @@ def build_scheduler(
 
     async def generation_tick() -> None:
         async with sessionmaker() as session:
-            posts = await generate.generate_batch(session)
-            await review.send_for_review(posts, notifier)
-            warning = await stock.low_stock_message(
-                session, settings, len(posts), settings.batch_size
-            )
-            if warning:
-                await notifier.send_message(warning)
+            tenants = await brands.all_brands(session)
+        for brand in tenants:  # a session per brand: one failure must not starve the others
+            try:
+                async with sessionmaker() as session:
+                    to_owner = notifier.for_brand(brand)
+                    posts = await generate.generate_batch(session, brand)
+                    await review.send_for_review(posts, to_owner)
+                    warning = await stock.low_stock_message(
+                        session, brand, settings, len(posts), settings.batch_size
+                    )
+                    if warning:
+                        await to_owner.send_message(warning)
+            except Exception:
+                logger.exception("Generation failed for brand %s.", brand.id)
 
     async def posting_tick() -> None:
         async with sessionmaker() as session:
-            await publish.publish_next(session)
+            tenants = await brands.all_brands(session)
+        for brand in tenants:
+            try:
+                async with sessionmaker() as session:
+                    await publish.publish_next(session, brand.id)
+            except Exception:
+                logger.exception("Publishing failed for brand %s.", brand.id)
 
     scheduler.posting_tick = posting_tick
     scheduler.add_job(

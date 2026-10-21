@@ -1,7 +1,9 @@
 """The owner-provided stock image library — see PRODUCT_SPEC §3.
 
 Generation is image-first: pick an image from here, then caption it (vision).
-``image_ref`` on ``Post`` is always the path relative to ``settings.stock_images_dir``.
+``image_ref`` on ``Post`` is always the path relative to ``settings.stock_images_dir``. Each
+brand reads ``stock/<stock_prefix>/`` (empty prefix = the top folder, brand 1 today), so
+its refs carry the prefix and ``/media`` serves them unchanged.
 """
 
 from __future__ import annotations
@@ -17,16 +19,20 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
-from app.models import BannedImage, Post, PostStatus
+from app.models import BannedImage, Brand, Post, PostStatus
 
 logger = logging.getLogger(__name__)
 
 _EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
 
-def list_images(settings: Settings) -> list[Path]:
-    """Enumerate stock images under ``settings.stock_images_dir`` (sorted, deterministic)."""
-    stock_dir = Path(settings.stock_images_dir)
+def brand_dir(settings: Settings, prefix: str) -> Path:
+    return Path(settings.stock_images_dir) / prefix
+
+
+def list_images(settings: Settings, prefix: str) -> list[Path]:
+    """Enumerate one brand's stock images (sorted, deterministic). ``prefix`` = stock_prefix."""
+    stock_dir = brand_dir(settings, prefix)
     if not stock_dir.is_dir():
         return []
     return sorted(p for p in stock_dir.iterdir() if p.suffix.lower() in _EXTENSIONS)
@@ -37,21 +43,30 @@ _COMMITTED = {PostStatus.APPROVED, PostStatus.KEPT, PostStatus.PUBLISHING, PostS
 
 
 async def _pools(
-    session: AsyncSession, settings: Settings
+    session: AsyncSession, brand: Brand, settings: Settings
 ) -> tuple[list[Path], set[str], set[str]]:
-    """All images on disk + the refs that are committed (used) and banned."""
-    images = list_images(settings)
+    """The brand's images on disk + its refs that are committed (used) and banned."""
+    images = list_images(settings, brand.stock_prefix)
     held = or_(
         Post.status.in_(_COMMITTED),
         # a pending 🔁 retry reuses its Almost'd parent's image — not back in the pool yet
         and_(Post.status == PostStatus.SUGGESTED, Post.retry_of.is_not(None)),
     )
-    committed = set((await session.scalars(select(Post.image_ref).where(held))).all())
-    banned = set((await session.scalars(select(BannedImage.image_ref))).all())
+    mine = Post.brand_id == brand.id
+    committed = set((await session.scalars(select(Post.image_ref).where(mine, held))).all())
+    banned = set(
+        (
+            await session.scalars(
+                select(BannedImage.image_ref).where(BannedImage.brand_id == brand.id)
+            )
+        ).all()
+    )
     return images, committed, banned
 
 
-async def select_images(session: AsyncSession, n: int, settings: Settings) -> list[Path]:
+async def select_images(
+    session: AsyncSession, brand: Brand, n: int, settings: Settings
+) -> list[Path]:
     """Pick up to ``n`` random images that are neither used by a committed post nor banned.
 
     "Committed" = APPROVED/KEPT/PUBLISHING/PUBLISHED, plus a suggested 🔁 retry. Other
@@ -60,9 +75,10 @@ async def select_images(session: AsyncSession, n: int, settings: Settings) -> li
     (see ``counts``).
     """
     stock_dir = Path(settings.stock_images_dir)
-    images, committed, banned = await _pools(session, settings)
+    images, committed, banned = await _pools(session, brand, settings)
     if not images:
-        logger.warning("Stock library %s is empty — no images to select.", stock_dir)
+        empty = brand_dir(settings, brand.stock_prefix)
+        logger.warning("Stock library %s is empty — no images to select.", empty)
         return []
     unused = [p for p in images if str(p.relative_to(stock_dir)) not in committed | banned]
     if len(unused) < n:
@@ -70,10 +86,10 @@ async def select_images(session: AsyncSession, n: int, settings: Settings) -> li
     return random.sample(unused, min(n, len(unused)))
 
 
-async def counts(session: AsyncSession, settings: Settings) -> dict[str, int]:
+async def counts(session: AsyncSession, brand: Brand, settings: Settings) -> dict[str, int]:
     """``{"unused", "used", "banned", "total"}`` for /status and /stock."""
     stock_dir = Path(settings.stock_images_dir)
-    images, committed, banned = await _pools(session, settings)
+    images, committed, banned = await _pools(session, brand, settings)
     refs = {str(p.relative_to(stock_dir)) for p in images}
     return {
         "unused": len(refs - committed - banned),
@@ -91,27 +107,27 @@ def summary_line(c: dict[str, int]) -> str:
 
 
 async def low_stock_message(
-    session: AsyncSession, settings: Settings, got: int, wanted: int
+    session: AsyncSession, brand: Brand, settings: Settings, got: int, wanted: int
 ) -> str | None:
     """Owner-facing text when a batch came back short because the unused pool ran dry."""
     if got >= wanted:
         return None
-    c = await counts(session, settings)
+    c = await counts(session, brand, settings)
     return (
         f"Only {got} of {wanted} generated — {summary_line(c)}.\n"
         "Send photos to this chat to add them to the stock library."
     )
 
 
-async def ban_image(session: AsyncSession, image_ref: str) -> None:
+async def ban_image(session: AsyncSession, brand_id: int, image_ref: str) -> None:
     """Idempotent: a second ban of the same ref is a no-op."""
-    if await session.get(BannedImage, image_ref) is None:
-        session.add(BannedImage(image_ref=image_ref))
+    if await session.get(BannedImage, (brand_id, image_ref)) is None:
+        session.add(BannedImage(brand_id=brand_id, image_ref=image_ref))
         await session.flush()
 
 
-async def unban_image(session: AsyncSession, image_ref: str) -> bool:
-    row = await session.get(BannedImage, image_ref)
+async def unban_image(session: AsyncSession, brand_id: int, image_ref: str) -> bool:
+    row = await session.get(BannedImage, (brand_id, image_ref))
     if row is None:
         return False
     await session.delete(row)

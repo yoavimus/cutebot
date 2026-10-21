@@ -1,4 +1,4 @@
-"""Load brand guidelines. Injected verbatim into the generation prompt."""
+"""Seed reader (M10): ``brand.md`` only seeds the brand row; runtime reads ``brands.text``."""
 
 from __future__ import annotations
 
