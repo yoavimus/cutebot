@@ -27,7 +27,7 @@ import json
 import logging
 import re
 import sys
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -538,6 +538,7 @@ async def _build_status_summary(session: AsyncSession, brand: Brand, settings: S
     c = await stock.counts(session, brand, settings)
     lines.append("\n<b>Stock</b>\n" + e(stock.summary_line(c)))
     lines.append("\n<b>Learning</b>\n" + e(await _learning_line(session, brand, settings)))
+    lines.append("\n<b>Cost</b>\n" + e(await _cost_line(session, brand)))
     if recent:
         pub = []
         for p in recent:
@@ -545,6 +546,24 @@ async def _build_status_summary(session: AsyncSession, brand: Brand, settings: S
             pub.append(f"#{p.id} — {ts}")
         lines.append("\n<b>Last published</b>\n<code>" + e("\n".join(pub)) + "</code>")
     return "\n".join(lines)
+
+
+_COST_DAYS = 30
+
+
+async def _cost_line(session: AsyncSession, brand: Brand) -> str:
+    """LLM spend on this brand's captions over the last 30 days (posts with a priced usage)."""
+    since = datetime.now(UTC) - timedelta(days=_COST_DAYS)
+    total, n = (
+        await session.execute(
+            select(func.sum(Post.cost_usd), func.count(Post.cost_usd)).where(
+                Post.brand_id == brand.id, Post.created_at >= since
+            )
+        )
+    ).one()
+    if not n:
+        return f"cost: no priced posts in the last {_COST_DAYS}d"
+    return f"cost: ${float(total):.2f} over {n} posts (last {_COST_DAYS}d)"
 
 
 async def _learning_line(session: AsyncSession, brand: Brand, settings: Settings) -> str:

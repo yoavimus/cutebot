@@ -42,16 +42,6 @@ DEFAULT_MODELS = [
 ]
 
 
-def post_cost(model: str, tokens_in: int | None, tokens_out: int | None) -> float | None:
-    """Cost of one call from LiteLLM's bundled price table (None if the id is unknown)."""
-    import litellm
-
-    price = litellm.model_cost.get(model.split("@")[0].split("/", 1)[-1])
-    if not price or tokens_in is None or tokens_out is None:
-        return None
-    return tokens_in * price["input_cost_per_token"] + tokens_out * price["output_cost_per_token"]
-
-
 async def run(models: list[str], n_images: int, out: str, use_learning: bool = False) -> None:
     settings = get_settings()
     brand = load_brand()
@@ -91,7 +81,7 @@ async def run(models: list[str], n_images: int, out: str, use_learning: bool = F
             try:
                 sug = await llm.caption_image(brand, image, s, context)
                 elapsed = time.monotonic() - t0
-                cost = post_cost(model, sug.tokens_in, sug.tokens_out)
+                cost = llm.cost_usd(model, sug.tokens_in, sug.tokens_out)
                 if cost is None:
                     unpriced.add(model)
                     cost_str = "cost ?"

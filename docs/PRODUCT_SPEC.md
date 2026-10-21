@@ -107,8 +107,13 @@ external worker in v1 — the scheduler runs in the app process.
 
 ## 4. Data model (`app/models.py`)
 
-- **Post** — `id, image_ref, caption_he, caption_en, visual_concept, rationale, status,
-  created_at, decided_at, published_at, queue_position, source_batch_id, retry_of`. `image_ref` is
+- **Brand** (M10) — `id, name, telegram_chat_id (unique), brand_text, brand_text_prev,
+  stock_prefix, created_at, updated_at` — the tenant. Post, Batch, Feedback, BannedImage and
+  Setting each carry a NOT NULL `brand_id`; a Telegram chat resolves to its brand
+  (`app/brands.py`) and unknown chats are ignored. One bot, one schedule per process until M13.
+- **Post** — `id, brand_id, image_ref, caption_he, caption_en, visual_concept, rationale, status,
+  created_at, decided_at, published_at, queue_position, source_batch_id, retry_of,
+  tokens_in, tokens_out, cost_usd` (the last three null when the provider reported no usage or the model has no price). `image_ref` is
   chosen **first** — it points at the selected stock image (a path/key into the owner's
   stock library) — and `caption_he` (primary) / `caption_en` / `visual_concept` are then
   written to match it. The AI-disclosure line is **not** stored per row; it's composed
@@ -118,13 +123,13 @@ external worker in v1 — the scheduler runs in the app process.
   edit_before, edit_after, created_at` — the training signal. `reason` is the one-tap
   reject chip; the `edit_*` triple records an owner correction (✏️ Fix), the strongest
   signal. `app/learning.py` turns this table into the context fed to every caption.
-- **Batch** — `id, created_at, brand_snapshot, model, size` — provenance for a
-  generation run.
-- **BannedImage** — `image_ref, banned_at` — stock images retired from future batches
+- **Batch** — `id, brand_id, created_at, brand_snapshot, model, size, cost_usd` — provenance
+  for a generation run; `cost_usd` sums its posts.
+- **BannedImage** — `brand_id, image_ref, banned_at` (key: brand + image) — stock images retired from future batches
   (🚫 Ban image); the file stays on disk.
-- **Setting** (`settings`) — `key, value, updated_at` — runtime preferences the bot can
+- **Setting** (`settings`) — `brand_id, key, value, updated_at` — runtime preferences the bot can
   change: `mode` (`live`|`learning`), `generation_cron`, `posting_slots`. A missing row
-  falls back to the env default (`app/prefs.py`); M10 adds `brand_id`.
+  falls back to the env default (`app/prefs.py`).
 
 ## 5. Stack
 

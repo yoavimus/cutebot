@@ -8,6 +8,7 @@ status plus a ``Batch`` provenance row.
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,8 +28,8 @@ async def generate_batch(
 ) -> list[Post]:
     """Generate and store a batch of suggestions for ``brand``. Returns the created posts.
 
-    Per-post LiteLLM usage rides on each suggestion (``s.tokens_in`` / ``s.tokens_out``)
-    inside the loop below — that is where M10.3 stores tokens and cost.
+    Per-post tokens and cost come from the LiteLLM usage on each suggestion; the batch
+    stores the sum (None when no post has a priced usage — never a guessed 0).
     """
     settings = get_settings()
     size = n or settings.batch_size
@@ -55,6 +56,7 @@ async def generate_batch(
             logger.warning("Skipping image %s: %s", image.name, exc)
             continue
         ref = str(image.relative_to(stock_dir)) if image.is_relative_to(stock_dir) else str(image)
+        cost = llm.cost_usd(settings.default_llm_model, s.tokens_in, s.tokens_out)
         post = Post(
             brand_id=brand.id,
             image_ref=ref,
@@ -62,6 +64,9 @@ async def generate_batch(
             caption_en=s.caption_en,
             visual_concept=s.visual_concept,
             rationale=s.rationale,
+            tokens_in=s.tokens_in,
+            tokens_out=s.tokens_out,
+            cost_usd=None if cost is None else Decimal(f"{cost:.6f}"),
             status=PostStatus.SUGGESTED,
             batch_id=batch.id,
         )
@@ -69,6 +74,8 @@ async def generate_batch(
         posts.append(post)
 
     batch.size = len(posts)  # actual successes, not planned
+    costs = [p.cost_usd for p in posts if p.cost_usd is not None]
+    batch.cost_usd = sum(costs, Decimal(0)) if costs else None
     await session.commit()
     for post in posts:
         await session.refresh(post)

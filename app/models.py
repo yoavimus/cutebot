@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from enum import StrEnum
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -70,6 +71,8 @@ class Batch(Base):
     model: Mapped[str] = mapped_column(String(128))
     size: Mapped[int] = mapped_column()
     brand_snapshot: Mapped[str] = mapped_column(Text, default="")
+    # Sum of its posts' cost; None = no priced usage (stub run or unknown model id).
+    cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(10, 6), default=None)
 
     posts: Mapped[list[Post]] = relationship(back_populates="batch")
 
@@ -86,6 +89,10 @@ class Post(Base):
     caption_en: Mapped[str] = mapped_column(Text)
     visual_concept: Mapped[str] = mapped_column(Text)
     rationale: Mapped[str] = mapped_column(Text, default="")
+    # LiteLLM usage of the caption call (M10.3); None when the provider reported none.
+    tokens_in: Mapped[int | None] = mapped_column(default=None)
+    tokens_out: Mapped[int | None] = mapped_column(default=None)
+    cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(10, 6), default=None)
 
     status: Mapped[PostStatus] = mapped_column(String(16), default=PostStatus.SUGGESTED)
     queue_position: Mapped[int | None] = mapped_column(default=None)

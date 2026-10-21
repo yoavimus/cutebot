@@ -85,7 +85,7 @@ Pipeline
                         runs a command and rewrites the card in place (Home · Queue N · Pending N /
                         Generate · Stock N · Schedule / Mode · Status · Help — publish from a
                         /queue ▶ row, not the grid). Generate asks 1 · 3 · 5 first.
-/status                 mode header, counts by status, queue depth, stock, learning verdicts, last 5 published
+/status                 mode header, counts by status, queue depth, stock, learning verdicts, 30-day LLM cost, last 5 published
 /queue                  approved posts in order, first 10 rows (+N more) — ▶ Post now / ❌ Drop per row
 /pending [resend]       list undecided suggestions (10 rows, newest first) with a 🔁 Resend newest 5
                         button; "resend" (typed or the button) re-DMs them, older cards stay open
@@ -163,7 +163,7 @@ run /distill again"; Apply also refuses if the row's text changed since the prop
 # The DB row is the source of truth; BRAND_FILE (brand.md) only seeds it at first boot.
 python -m scripts.brand_sync push   # BRAND_FILE -> row (old text kept in brand_text_prev)
 python -m scripts.brand_sync pull   # row -> BRAND_FILE, byte-for-byte
-# On Railway: railway ssh, then run from /app (BRAND_FILE=/data/brand.md, DATABASE_URL set).
+# On Railway run it where BRAND_FILE (/data/brand.md) and DATABASE_URL are set.
 ```
 
 ## Model eval (Hebrew quality bake-off)
