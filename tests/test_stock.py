@@ -132,3 +132,19 @@ async def test_pending_retry_and_kept_hold_their_image(
         for p in await stock.select_images(session, await brands.default(session), 3, settings)
     }
     assert refs == {"c.jpg"}
+
+
+async def test_register_dedupes_and_backfill_marks_manual(
+    session: AsyncSession, tmp_path: Path
+) -> None:
+    settings = Settings(stock_images_dir=str(tmp_path))
+    brand = await brands.default(session)
+    (tmp_path / "old.jpg").write_bytes(b"\xff\xd8\xff-old")  # on the volume, no row
+    assert await stock.backfill_manual(session, brand, settings) == 1
+    assert await stock.backfill_manual(session, brand, settings) == 0
+    row = await session.get(stock.StockImage, (brand.id, "old.jpg"))
+    assert row is not None and row.source == "manual"
+
+    (tmp_path / "new.jpg").write_bytes(b"\xff\xd8\xff-old")  # same bytes as old.jpg
+    assert await stock.register(session, brand, tmp_path / "new.jpg", "telegram", "f") is None
+    assert not (tmp_path / "new.jpg").exists()

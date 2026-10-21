@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     secondary_languages: str = "en"
     post_disclaimer: str = "🤖 מאת CuteBot · by CuteBot"
 
+    # Google Drive sync (M11.3): the service-account key JSON (the whole file, one line).
+    # Blank = Drive off; /drive and /sync say so.
+    google_service_account_json: str = ""
+
     # Publishers (Instagram real in M7 when configured; TikTok/X stay stubs)
     # Master kill-switch: set false to keep the full pipeline running but route every
     # network to the logging stub — approve/queue/publish work, nothing hits Instagram.

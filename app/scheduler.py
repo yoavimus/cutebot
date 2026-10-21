@@ -18,7 +18,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app import brands, prefs, stock
+from app import brands, drive, prefs, stock
 from app.config import Settings
 from app.notifier.base import Notifier
 from app.pipeline import generate, publish, review
@@ -144,6 +144,12 @@ def build_scheduler(
                         await to_owner.send_message(warning)
             except Exception:
                 logger.exception("Generation failed for brand %s.", brand.id)
+            if brand.drive_folder_id and (client := drive.client(settings)) is not None:
+                try:  # after generation, as planned: new photos feed tomorrow's batch
+                    async with sessionmaker() as session:
+                        await drive.sync(session, brand, settings, client)
+                except Exception:
+                    logger.exception("Drive sync failed for brand %s.", brand.id)
 
     async def posting_tick() -> None:
         async with sessionmaker() as session:
@@ -155,7 +161,17 @@ def build_scheduler(
             except Exception:
                 logger.exception("Publishing failed for brand %s.", brand.id)
 
+    async def trash_tick() -> None:
+        logger.info("Stock trash purge: %d file(s) removed.", stock.purge_trash(settings))
+
     scheduler.posting_tick = posting_tick
+    scheduler.add_job(
+        trash_tick,
+        CronTrigger(hour=3, minute=30, timezone=tz),
+        id="trash-purge",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
     scheduler.add_job(
         generation_tick,
         CronTrigger.from_crontab(schedule.generation_cron, timezone=tz),
