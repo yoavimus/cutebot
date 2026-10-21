@@ -37,7 +37,7 @@ import httpx
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import brands, distill, learning, prefs, stock
+from app import brands, distill, drive, learning, prefs, stock
 from app import scheduler as sched
 from app.config import Settings, get_settings
 from app.llm import CaptionError
@@ -88,6 +88,8 @@ _COMMANDS: list[tuple[str, str, str, str]] = [
     ("Pipeline", "postnow", "", "[id] — publish next, or post #id"),
     ("Pipeline", "requeue", "", "<id> — put a failed post back in the queue"),
     ("Library", "stock", "", "[unban <file>] — counts, banned list"),
+    ("Library", "drive", "", "[folder link] — link a shared Google Drive folder"),
+    ("Library", "sync", "", "— import new photos from the Drive folder now"),
     ("Settings", "schedule", "", "[post 12:00,18:00 | generate 09:00 | reset]"),
     ("Settings", "mode", "", "[learning|live] — learning: ✅ = Keep, nothing posts"),
     ("Settings", "distill", "", "— from recent feedback"),
@@ -705,6 +707,8 @@ async def _cmd_stock(
     e = html_lib.escape
     lines = [e(stock.summary_line(c))]
     keyboard: list[list[dict[str, str]]] = [[_btn("🖼 Browse", "stk:p:0")]]
+    if brand.drive_folder_id:
+        keyboard[0].append(_btn("🔄 Sync Drive", "con:sync"))
     for ref in banned[:_LIST_ROWS]:
         data = f"unban:{ref}"
         if len(data.encode()) <= _CALLBACK_DATA_MAX:
@@ -1068,6 +1072,71 @@ async def _cmd_brand(
     await notifier.send_message(body, html=True)
 
 
+_DRIVE_OFF = "Google Drive is not set up on this server (GOOGLE_SERVICE_ACCOUNT_JSON is blank)."
+
+
+async def _cmd_drive(
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, args: str, settings: Settings
+) -> None:
+    """``/drive`` = the address to share with; ``/drive <link|id>`` = verify and link."""
+    client = drive.client(settings)
+    if client is None:
+        await notifier.send_message(_DRIVE_OFF)
+        return
+    share = (
+        f"Share a Google Drive folder with {client.email} as Editor (the bot files posted "
+        "and banned photos into sub-folders), then send /drive <folder link>."
+    )
+    if not args:
+        lines = [share]
+        if brand.drive_folder_id:
+            when = brand.drive_synced_at
+            last = f"{when:%d %b %H:%M} UTC" if when else "never"
+            lines.append(f"Linked folder: {brand.drive_folder_id} · last sync {last} · /sync")
+        await notifier.send_message("\n".join(lines))
+        return
+    folder_id = drive.parse_folder_id(args)
+    if folder_id is None:
+        await notifier.send_message("That is not a Drive folder link. " + share)
+        return
+    try:
+        meta = await client.get(folder_id)
+        if meta.get("mimeType") != drive.FOLDER_MIME:
+            await notifier.send_message("That link is a file, not a folder.")
+            return
+        n = len(await client.list_images(folder_id))
+    except drive.DriveError as exc:
+        if exc.status in (403, 404):
+            await notifier.send_message(f"I can't see that folder. {share}")
+        else:
+            await notifier.send_message(f"Drive error ({exc.status}): {exc}")
+        return
+    brand.drive_folder_id = folder_id
+    await session.commit()
+    await notifier.send_message(
+        f"Linked “{meta.get('name', folder_id)}” — {n} photo(s) in it. "
+        "/sync imports them now; new ones are pulled nightly."
+    )
+
+
+async def _cmd_sync(
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, args: str, settings: Settings
+) -> None:
+    client = drive.client(settings)
+    if client is None:
+        await notifier.send_message(_DRIVE_OFF)
+        return
+    if not brand.drive_folder_id:
+        await notifier.send_message("No Drive folder linked yet — /drive shows how.")
+        return
+    try:
+        n = await drive.sync(session, brand, settings, client)
+    except drive.DriveError as exc:
+        await notifier.send_message(f"Drive sync failed ({exc.status}): {exc}")
+        return
+    await notifier.send_message(f"Drive sync: {n} new photo{'s' if n != 1 else ''} imported.")
+
+
 _HANDLERS: dict[str, Any] = {
     "/console": _cmd_console,
     "/home": _cmd_home,
@@ -1078,6 +1147,8 @@ _HANDLERS: dict[str, Any] = {
     "/requeue": _cmd_requeue,
     "/pending": _cmd_pending,
     "/stock": _cmd_stock,
+    "/drive": _cmd_drive,
+    "/sync": _cmd_sync,
     "/schedule": _cmd_schedule,
     "/mode": _cmd_mode,
     "/distill": _cmd_distill,
@@ -1284,6 +1355,7 @@ async def _browse_callback(
         return
     if kind == "b":
         await stock.ban_image(session, brand.id, ref)
+        await drive.write_back(session, brand.id, ref, drive.BANNED)
         toast = "🚫 Banned"
     else:
         problem = await stock.delete_image(session, brand, settings, ref)
@@ -1476,6 +1548,7 @@ async def process_callback(
         if reason == _BAN_REASON and post.status == PostStatus.REJECTED:
             await stock.ban_image(session, brand.id, post.image_ref)
             await session.commit()
+            await drive.write_back(session, brand.id, post.image_ref, drive.BANNED)
             toast = "❌ Rejected · 🚫 image banned"
 
         changed = pre_status != post.status

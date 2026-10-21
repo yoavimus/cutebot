@@ -32,8 +32,9 @@ Health check:
 curl -s http://127.0.0.1:8002/health        # -> {"status":"ok"}
 ```
 
-Scheduler jobs: `generation` (cron), `posting-HHMM` (slots), `trash-purge` (03:30 daily, empties
-`stock/.trash/` entries older than 30 days). The home card warns above 80 % stock-volume usage.
+Scheduler jobs: `generation` (cron; afterwards each brand with a linked Drive folder is synced,
+logged as `Drive sync brand N: X new of Y listed`), `posting-HHMM` (slots), `trash-purge` (03:30
+daily, empties `stock/.trash/` entries older than 30 days). The home card warns above 80 % stock-volume usage.
 
 ## Trigger pipeline stages manually (no waiting for cron)
 
@@ -96,7 +97,10 @@ Pipeline
 /postnow [id]           publish front-of-queue, or a specific APPROVED post (refused in learning mode / on kept)
 /requeue <id>           move a FAILED post back into the queue (typed only — not in the menu)
 Library
-/stock [unban <file>]   unused / used / banned counts; 🖼 Browse button; first 10 banned rows have ♻️ Unban buttons
+/stock [unban <file>]   unused / used / banned counts; 🖼 Browse button (+ 🔄 Sync Drive once a folder is linked); first 10 banned rows have ♻️ Unban buttons
+/drive                  the service-account address to share a folder with (as Editor) + the linked folder and last sync
+/drive <link|id>        verify the bot can list the folder, then link it (brands.drive_folder_id); unseen folder -> clear refusal
+/sync                   import the linked folder's new images now (top level only; known Drive id or sha256 skipped)
 Settings
 /schedule               generation cron + slots (SCHEDULE_TZ) with next-run times, plus edit buttons:
                         ✖ per slot, ＋ Add slot / ⏰ Generate (hour grid 07–22), ↺ Reset — whole hours only
@@ -138,6 +142,7 @@ message, so Telegram's 4096-char limit applies; `/stock` and `/queue` already ca
 | `postnow:<id>` / `drop:<id>` | `/queue` row buttons → `publish_by_id` / reject (owner-gated) |
 | `stk:p:<page>` | Stock › Browse: sends the page's 10 thumbnails (320 px, `n · used k×, last d Mon`) + one control message |
 | `stk:b:<h>` / `stk:d:<h>` | control row 🚫 ban / 🗑 delete (`<h>` = 10-char hash of the ref); delete moves the file to `stock/.trash/<brand id>/` and sets `deleted_at`; refused while a suggested/approved/publishing post uses it. `stk:n` = inert ✖ |
+| `con:sync` | Stock sub-menu 🔄 Sync Drive (only when a folder is linked) = `/sync` |
 | `unban:<ref>` | `/stock` row button; refs over Telegram's 64-byte callback cap show the typed command instead |
 | `con:<cmd>` · `gen:<1\|3\|5>` · `pend:resend` | console card taps (owner-gated); long ones show "⏳ …" in the card first |
 | `sch:view` · `sch:pick:add\|gen` · `sch:add:<H>` · `sch:del:<HHMM>` · `sch:gen:<H>` · `sch:reset` | `/schedule` edit buttons; each replays through `_cmd_schedule` (owner-gated) |
@@ -243,6 +248,7 @@ pytest -m live        # live integration tests (requires ANTHROPIC_API_KEY in en
    TELEGRAM_WEBHOOK_SECRET=<random-string>
    STOCK_IMAGES_DIR=/data/stock
    BRAND_FILE=/data/brand.md
+   GOOGLE_SERVICE_ACCOUNT_JSON=<service-account key JSON, one line>   # M11.3 Drive sync; blank = off
    # Schedule (change + redeploy to adjust):
    GENERATION_CRON=0 9 * * *   # when to generate suggestions (cron, in SCHEDULE_TZ)
    POSTING_SLOTS=12:00,18:00   # when to publish approved posts (HH:MM in SCHEDULE_TZ)
