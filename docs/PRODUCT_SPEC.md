@@ -104,11 +104,23 @@ external worker in v1 — the scheduler runs in the app process.
   passed to Claude (multimodal), so the caption is grounded in what the model actually
   sees. `visual_concept` describes the chosen image and grounds the caption. AI image generation is **deferred for the foreseeable future** (roadmap
   §8.B). The publish path therefore attaches an existing file, never a generated one.
+- **Stock library: the folder is the store, `stock_images` is the record (M11).** Files live
+  under `STOCK_IMAGES_DIR/<stock_prefix>/` on the Railway volume; `image_ref` stays an opaque
+  key, so moving to object storage later is contained in `app/stock.py`. Three ways in, all
+  through `stock.register` (SHA-256 duplicate skip, HEIC/HEIF converted to JPEG): a Telegram
+  photo, file (the original, up to Telegram's 20 MB bot limit) or album (one reply per album);
+  a shared **Google Drive folder** (`app/drive.py`: one service account, the owner shares a
+  folder and sends `/drive <link>`; pulled nightly after generation and on `/sync`); or a file
+  dropped on the volume (`manual`). Write-back: a published image's Drive file moves to
+  `posted/`, a banned one to `banned/` (re-parenting only, so the owner can drag it back).
+  `/stock › Browse` pages ten thumbnails with used-count and 🚫 ban / 🗑 delete; delete moves
+  the file to `stock/.trash/`, emptied after 30 days. The home card warns above 80 % volume use.
 
 ## 4. Data model (`app/models.py`)
 
 - **Brand** (M10) — `id, name, telegram_chat_id (unique), brand_text, brand_text_prev,
-  stock_prefix, created_at, updated_at` — the tenant. Post, Batch, Feedback, BannedImage and
+  stock_prefix, drive_folder_id, drive_synced_at, created_at, updated_at` — the tenant
+  (the two `drive_*` columns are M11: the linked Google Drive folder and its last sync). Post, Batch, Feedback, BannedImage and
   Setting each carry a NOT NULL `brand_id`; a Telegram chat resolves to its brand
   (`app/brands.py`) and unknown chats are ignored. One bot, one schedule per process until M13.
 - **Post** — `id, brand_id, image_ref, caption_he, caption_en, visual_concept, rationale, status,
@@ -127,6 +139,10 @@ external worker in v1 — the scheduler runs in the app process.
   for a generation run; `cost_usd` sums its posts.
 - **BannedImage** — `brand_id, image_ref, banned_at` (key: brand + image) — stock images retired from future batches
   (🚫 Ban image); the file stays on disk.
+- **StockImage** (`stock_images`, M11) — `brand_id, image_ref` (key), `source`
+  (`telegram|drive|manual`), `source_id` (Telegram or Drive file id), `sha256`, `imported_at`,
+  `deleted_at` — provenance of one stock file; index on (`brand_id`, `sha256`) for the
+  duplicate skip. A ban stays a `BannedImage`; used-count and last-used are computed from posts.
 - **Setting** (`settings`) — `brand_id, key, value, updated_at` — runtime preferences the bot can
   change: `mode` (`live`|`learning`), `generation_cron`, `posting_slots`. A missing row
   falls back to the env default (`app/prefs.py`).

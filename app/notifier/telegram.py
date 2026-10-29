@@ -27,6 +27,7 @@ import json
 import logging
 import re
 import sys
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -36,7 +37,7 @@ import httpx
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import brands, distill, learning, prefs, stock
+from app import brands, distill, drive, learning, prefs, stock
 from app import scheduler as sched
 from app.config import Settings, get_settings
 from app.llm import CaptionError
@@ -87,6 +88,8 @@ _COMMANDS: list[tuple[str, str, str, str]] = [
     ("Pipeline", "postnow", "", "[id] — publish next, or post #id"),
     ("Pipeline", "requeue", "", "<id> — put a failed post back in the queue"),
     ("Library", "stock", "", "[unban <file>] — counts, banned list"),
+    ("Library", "drive", "", "[folder link] — link a shared Google Drive folder"),
+    ("Library", "sync", "", "— import new photos from the Drive folder now"),
     ("Settings", "schedule", "", "[post 12:00,18:00 | generate 09:00 | reset]"),
     ("Settings", "mode", "", "[learning|live] — learning: ✅ = Keep, nothing posts"),
     ("Settings", "distill", "", "— from recent feedback"),
@@ -102,6 +105,7 @@ _CALLBACK_DATA_MAX = 64  # bytes, Telegram's cap
 # Output caps: a console tap must never flood the chat or blow Telegram's 4096-char message.
 _PENDING_RESEND = 5  # /pending re-DMs only the newest cards; older ones stay open
 _LIST_ROWS = 10  # /queue and /stock show this many rows, then "+N more"
+_DISK_WARN_PCT = 80  # home card warns above this volume usage
 _GENERATE_MAX = 10  # /generate n is clamped — each post is a paid vision call and a card
 # The pinned console card: one tap = one command, output replaces the card text.
 # /postnow is deliberately absent — publish from the ▶ button on a /queue row.
@@ -229,6 +233,44 @@ class TelegramNotifier:
                     self._url("pinChatMessage"),
                     json={"chat_id": chat, "message_id": mid, "disable_notification": True},
                 )
+
+    async def send_media_group(self, items: list[tuple[bytes, str]]) -> None:
+        """One album of JPEG ``(bytes, caption)`` thumbnails (Telegram: 2–10 items)."""
+        if not self._settings.telegram_bot_token or not self._chat_id:
+            return
+        if len(items) == 1:  # sendMediaGroup needs 2–10 items
+            async with httpx.AsyncClient(timeout=60) as client:
+                await client.post(
+                    self._url("sendPhoto"),
+                    data={"chat_id": self._chat_id, "caption": items[0][1]},
+                    files={"photo": items[0][0]},
+                )
+            return
+        media = [
+            {"type": "photo", "media": f"attach://p{i}", "caption": cap}
+            for i, (_, cap) in enumerate(items)
+        ]
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                self._url("sendMediaGroup"),
+                data={"chat_id": self._chat_id, "media": json.dumps(media)},
+                files={f"p{i}": data for i, (data, _) in enumerate(items)},
+            )
+        if not resp.json().get("ok"):
+            logger.warning("sendMediaGroup rejected: %s", resp.json().get("description"))
+
+    async def edit_control(self, cb_message: dict, text: str, rows: list[list[dict]]) -> None:
+        """Rewrite one of our messages in place (text + inline keyboard)."""
+        async with httpx.AsyncClient(timeout=15) as client:
+            await client.post(
+                self._url("editMessageText"),
+                json={
+                    "chat_id": cb_message["chat"]["id"],
+                    "message_id": cb_message["message_id"],
+                    "text": text,
+                    "reply_markup": {"inline_keyboard": rows},
+                },
+            )
 
     async def set_my_commands(self) -> None:
         """Register the "/" menu for the owner's chat; fall back to the default scope."""
@@ -606,6 +648,8 @@ async def _build_home(
     queued = f"📬 {c['queue']} queued"
     lines.append(f"{queued} · next post {_fmt_next(nxt)}" if nxt else queued)
     lines.append(f"📷 {c['stock']} unused photos")
+    if (used := stock.disk_usage_pct(settings)) is not None and used > _DISK_WARN_PCT:
+        lines.append(f"⚠️ Stock volume {used}% full")
     lines.append("📚 " + e((await _learning_line(session, brand, settings)).split("\n")[0]))
     now = datetime.now(ZoneInfo(settings.schedule_tz)).strftime("%H:%M")
     lines.append(f"<i>updated {now}</i>")
@@ -635,7 +679,7 @@ async def _cmd_help(
     for group in dict.fromkeys(g for g, *_ in _COMMANDS):
         lines.append(f"\n<b>{group}</b>")
         lines += [f"/{c} {e(u)}".rstrip() for g, c, _, u in _COMMANDS if g == group]
-    lines.append("\nSend a photo to add it to the stock library.")
+    lines.append("\nSend photos to add them to the stock library — send as file for full quality.")
     await notifier.send_message("\n".join(lines), html=True)
 
 
@@ -662,7 +706,9 @@ async def _cmd_stock(
     ).all()
     e = html_lib.escape
     lines = [e(stock.summary_line(c))]
-    keyboard: list[list[dict[str, str]]] = []
+    keyboard: list[list[dict[str, str]]] = [[_btn("🖼 Browse", "stk:p:0")]]
+    if brand.drive_folder_id:
+        keyboard[0].append(_btn("🔄 Sync Drive", "con:sync"))
     for ref in banned[:_LIST_ROWS]:
         data = f"unban:{ref}"
         if len(data.encode()) <= _CALLBACK_DATA_MAX:
@@ -673,7 +719,7 @@ async def _cmd_stock(
     if len(banned) > _LIST_ROWS:
         more = len(banned) - _LIST_ROWS
         lines.append(f"… +{more} more banned — /stock unban &lt;file&gt; works for any of them")
-    await notifier.send_message("\n".join(lines), html=True, keyboard=keyboard or None)
+    await notifier.send_message("\n".join(lines), html=True, keyboard=keyboard)
 
 
 async def _cmd_generate(
@@ -1026,6 +1072,71 @@ async def _cmd_brand(
     await notifier.send_message(body, html=True)
 
 
+_DRIVE_OFF = "Google Drive is not set up on this server (GOOGLE_SERVICE_ACCOUNT_JSON is blank)."
+
+
+async def _cmd_drive(
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, args: str, settings: Settings
+) -> None:
+    """``/drive`` = the address to share with; ``/drive <link|id>`` = verify and link."""
+    client = drive.client(settings)
+    if client is None:
+        await notifier.send_message(_DRIVE_OFF)
+        return
+    share = (
+        f"Share a Google Drive folder with {client.email} as Editor (the bot files posted "
+        "and banned photos into sub-folders), then send /drive <folder link>."
+    )
+    if not args:
+        lines = [share]
+        if brand.drive_folder_id:
+            when = brand.drive_synced_at
+            last = f"{when:%d %b %H:%M} UTC" if when else "never"
+            lines.append(f"Linked folder: {brand.drive_folder_id} · last sync {last} · /sync")
+        await notifier.send_message("\n".join(lines))
+        return
+    folder_id = drive.parse_folder_id(args)
+    if folder_id is None:
+        await notifier.send_message("That is not a Drive folder link. " + share)
+        return
+    try:
+        meta = await client.get(folder_id)
+        if meta.get("mimeType") != drive.FOLDER_MIME:
+            await notifier.send_message("That link is a file, not a folder.")
+            return
+        n = len(await client.list_images(folder_id))
+    except drive.DriveError as exc:
+        if exc.status in (403, 404):
+            await notifier.send_message(f"I can't see that folder. {share}")
+        else:
+            await notifier.send_message(f"Drive error ({exc.status}): {exc}")
+        return
+    brand.drive_folder_id = folder_id
+    await session.commit()
+    await notifier.send_message(
+        f"Linked “{meta.get('name', folder_id)}” — {n} photo(s) in it. "
+        "/sync imports them now; new ones are pulled nightly."
+    )
+
+
+async def _cmd_sync(
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, args: str, settings: Settings
+) -> None:
+    client = drive.client(settings)
+    if client is None:
+        await notifier.send_message(_DRIVE_OFF)
+        return
+    if not brand.drive_folder_id:
+        await notifier.send_message("No Drive folder linked yet — /drive shows how.")
+        return
+    try:
+        n = await drive.sync(session, brand, settings, client)
+    except drive.DriveError as exc:
+        await notifier.send_message(f"Drive sync failed ({exc.status}): {exc}")
+        return
+    await notifier.send_message(f"Drive sync: {n} new photo{'s' if n != 1 else ''} imported.")
+
+
 _HANDLERS: dict[str, Any] = {
     "/console": _cmd_console,
     "/home": _cmd_home,
@@ -1036,6 +1147,8 @@ _HANDLERS: dict[str, Any] = {
     "/requeue": _cmd_requeue,
     "/pending": _cmd_pending,
     "/stock": _cmd_stock,
+    "/drive": _cmd_drive,
+    "/sync": _cmd_sync,
     "/schedule": _cmd_schedule,
     "/mode": _cmd_mode,
     "/distill": _cmd_distill,
@@ -1048,31 +1161,233 @@ _HANDLERS: dict[str, Any] = {
 # ─────────────────────────────── photo upload ────────────────────────────────
 
 
-async def _handle_photo_upload(
-    notifier: TelegramNotifier, brand: Brand, msg: dict, settings: Settings
-) -> None:
-    photo = msg.get("photo", [])
-    if not photo:
-        return
-    file_id = photo[-1]["file_id"]  # largest size is last
-    async with httpx.AsyncClient(timeout=30) as client:
+_BOT_DOWNLOAD_MAX = 20 * 1024 * 1024  # Telegram's bot getFile limit
+_ALBUM_QUIET = 2.0  # seconds without a new file before the one reply per album
+_IMAGE_MIME_EXT = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/heic": ".heic",
+    "image/heif": ".heif",
+}
+
+
+@dataclass
+class _Album:
+    saved: int = 0
+    dupes: int = 0
+    failed: int = 0
+    timer: asyncio.Task[None] | None = None
+
+
+# ponytail: in-process album state; a restart inside the 2 s window loses one reply, not files.
+_albums: dict[str, _Album] = {}
+
+
+def _upload_summary(saved: int, dupes: int, failed: int = 0) -> str:
+    parts = [f"Saved {saved} photo{'s' if saved != 1 else ''}"]
+    if dupes:
+        parts.append(f"{dupes} duplicate{'s' if dupes != 1 else ''} skipped")
+    if failed:
+        parts.append(f"{failed} failed")
+    return ", ".join(parts)
+
+
+async def _download_telegram_file(
+    settings: Settings, notifier: TelegramNotifier, file_id: str
+) -> tuple[bytes, str] | None:
+    """``(bytes, file_path)`` of a Telegram file, or None when getFile refuses."""
+    async with httpx.AsyncClient(timeout=60) as client:
         resp = await client.get(notifier._url("getFile"), params={"file_id": file_id})
         data = resp.json()
         if not data.get("ok"):
             logger.warning("getFile failed: %s", data)
-            await notifier.send_message("Failed to retrieve photo from Telegram.")
-            return
+            return None
         file_path = data["result"]["file_path"]
         dl_url = f"https://api.telegram.org/file/bot{settings.telegram_bot_token}/{file_path}"
-        img_resp = await client.get(dl_url)
+        return (await client.get(dl_url)).content, file_path
 
-    stock_dir = stock.brand_dir(settings, brand.stock_prefix)
-    stock_dir.mkdir(parents=True, exist_ok=True)
-    filename = Path(file_path).name
-    dest = stock_dir / filename
-    dest.write_bytes(img_resp.content)
-    await notifier.send_message(f"Photo saved to stock library as {filename}.")
-    logger.info("Photo uploaded to stock: %s", dest)
+
+async def _flush_album(group: str, notifier: TelegramNotifier, delay: float) -> None:
+    await asyncio.sleep(delay)
+    album = _albums.pop(group, None)
+    if album is not None:
+        await notifier.send_message(_upload_summary(album.saved, album.dupes, album.failed))
+
+
+async def _handle_upload(
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, msg: dict, settings: Settings
+) -> None:
+    """A compressed ``photo`` or an image ``document`` (the original) → the stock library."""
+    doc = msg.get("document")
+    if doc is not None:
+        file_id, size, name = doc["file_id"], doc.get("file_size") or 0, doc.get("file_name") or ""
+        ext = _IMAGE_MIME_EXT.get((doc.get("mime_type") or "").lower()) or Path(name).suffix.lower()
+        if size > _BOT_DOWNLOAD_MAX:
+            await notifier.send_message("That file is too large for Telegram — use Drive.")
+            return
+    else:
+        photo = msg["photo"][-1]  # largest size is last
+        file_id, name, ext = photo["file_id"], "", ".jpg"
+    group = msg.get("media_group_id")
+
+    saved = dupe = failed = 0
+    got = await _download_telegram_file(settings, notifier, file_id)
+    if got is None:
+        failed = 1
+    else:
+        content, file_path = got
+        ext = ext if ext in stock.IMPORTABLE else Path(file_path).suffix.lower() or ".jpg"
+        stock_dir = stock.brand_dir(settings, brand.stock_prefix)
+        stock_dir.mkdir(parents=True, exist_ok=True)
+        dest = stock.unique_path(stock_dir, (Path(name).stem or Path(file_path).stem) + ext)
+        dest.write_bytes(content)
+        try:
+            row = await stock.register(session, brand, dest, "telegram", file_id)
+        except Exception:  # noqa: BLE001 — an unreadable HEIC must not lose the rest of an album
+            logger.exception("Could not import %s", dest)
+            dest.unlink(missing_ok=True)
+            row, failed = None, 1
+        await session.commit()
+        saved, dupe = int(row is not None), int(row is None and not failed)
+
+    if not group:
+        if failed:
+            await notifier.send_message("Failed to import that file.")
+        else:
+            await notifier.send_message(_upload_summary(saved, dupe))
+        return
+    album = _albums.setdefault(group, _Album())
+    album.saved, album.dupes, album.failed = (
+        album.saved + saved,
+        album.dupes + dupe,
+        album.failed + failed,
+    )
+    if album.timer is not None:
+        album.timer.cancel()
+    album.timer = asyncio.create_task(_flush_album(group, notifier, _ALBUM_QUIET))
+
+
+# ─────────────────────────────── stock browser ───────────────────────────────
+
+
+def _used_caption(n: int, item: stock.PageItem) -> str:
+    use = "unused" if not item.used else f"used {item.used}×"
+    if item.last_used:
+        use += f", last {item.last_used:%d %b}"
+    return f"{n} · {use}" + (" · 🚫 banned" if item.banned else "")
+
+
+def _browse_rows(
+    hashes: list[str | None], banned: set[int], page: int, pages: int
+) -> list[list[dict[str, str]]]:
+    """Ban row, delete row, nav row. ``hashes[i]`` None = deleted (inert ✖)."""
+    ban_row, del_row = [], []
+    for i, h in enumerate(hashes, 1):
+        if h is None:
+            ban_row.append(_btn("✖", "stk:n"))
+            del_row.append(_btn("✖", "stk:n"))
+        else:
+            ban_row.append(_btn(f"🚫{i}✓" if i in banned else f"🚫 {i}", f"stk:b:{h}"))
+            del_row.append(_btn(f"🗑 {i}", f"stk:d:{h}"))
+    nav = []
+    if page > 0:
+        nav.append(_btn("‹ Prev", f"stk:p:{page - 1}"))
+    if page < pages - 1:
+        nav.append(_btn("Next ›", f"stk:p:{page + 1}"))
+    nav.append(_btn("‹ Menu", "con:home"))
+    return (
+        [ban_row[:5], ban_row[5:], del_row[:5], del_row[5:], nav]
+        if len(hashes) > 5
+        else [
+            ban_row,
+            del_row,
+            nav,
+        ]
+    )
+
+
+async def _show_page(
+    session: AsyncSession, notifier: TelegramNotifier, brand: Brand, settings: Settings, page: int
+) -> None:
+    await stock.backfill_manual(session, brand, settings)
+    await session.commit()
+    items, page, pages = await stock.page_items(session, brand, settings, page)
+    if not items:
+        await notifier.send_message("No photos in the library yet — send some to this chat.")
+        return
+    root = Path(settings.stock_images_dir)
+    thumbs = [
+        (stock.thumbnail(root / it.ref), _used_caption(n, it)) for n, it in enumerate(items, 1)
+    ]
+    await notifier.send_media_group(thumbs)
+    rows = _browse_rows(
+        [stock.ref_hash(it.ref) for it in items],
+        {n for n, it in enumerate(items, 1) if it.banned},
+        page,
+        pages,
+    )
+    await notifier.send_message(
+        f"Page {page + 1}/{pages} — 🚫 bans the photo, 🗑 moves it to the trash", keyboard=rows
+    )
+
+
+async def _browse_callback(
+    session: AsyncSession,
+    notifier: TelegramNotifier,
+    brand: Brand,
+    cb: dict,
+    arg: str,
+    settings: Settings,
+) -> None:
+    """``stk:p:<page>`` · ``stk:b:<hash>`` · ``stk:d:<hash>`` · ``stk:n`` (inert)."""
+    kind, _, val = arg.partition(":")
+    if kind == "p" and val.isdigit():
+        await notifier.answer_callback(cb["id"], "🖼 Loading…")
+        await _show_page(session, notifier, brand, settings, int(val))
+        return
+    if kind not in ("b", "d"):
+        await notifier.answer_callback(cb["id"], "Gone")
+        return
+    ref = next((r for r in stock.brand_refs(settings, brand) if stock.ref_hash(r) == val), None)
+    if ref is None:
+        await notifier.answer_callback(cb["id"], "Already gone")
+        return
+    if kind == "b":
+        await stock.ban_image(session, brand.id, ref)
+        await drive.write_back(session, brand.id, ref, drive.BANNED)
+        toast = "🚫 Banned"
+    else:
+        problem = await stock.delete_image(session, brand, settings, ref)
+        toast = "🗑 Moved to trash" if problem is None else f"Can't delete — {problem}"
+    await session.commit()
+    await notifier.answer_callback(cb["id"], toast)
+    if toast.startswith("Can't"):
+        return
+    # Redraw from the keyboard the message already carries: the numbering stays that of the
+    # thumbnails above it, with no server-side page state.
+    msg = cb["message"]
+    markup = msg.get("reply_markup", {}).get("inline_keyboard", [])
+    item_btns = [
+        b
+        for row in markup
+        for b in row
+        if b["callback_data"].startswith(("stk:b:", "stk:d:", "stk:n"))
+    ]
+    ban_btns = item_btns[: len(item_btns) // 2]  # ban row first, then the same count of 🗑
+    hashes: list[str | None] = []
+    banned: set[int] = set()
+    for i, b in enumerate(ban_btns, 1):
+        h = b["callback_data"].removeprefix("stk:b:") if b["callback_data"] != "stk:n" else None
+        if h == val and kind == "d":
+            h = None
+        if b["text"].endswith("✓") or (h == val and kind == "b"):
+            banned.add(i)
+        hashes.append(h)
+    text = msg.get("text") or ""
+    cur, _, tot = text.removeprefix("Page ").split(" ")[0].partition("/")
+    rows = _browse_rows(hashes, banned, int(cur) - 1, int(tot))
+    await notifier.edit_control(msg, text, rows)
 
 
 # ─────────────────────────────── message dispatcher ──────────────────────────
@@ -1134,8 +1449,10 @@ async def process_message(
             await handler(session, notifier, brand, args.strip(), settings)
         return
 
-    if msg.get("photo"):
-        await _handle_photo_upload(notifier, brand, msg, settings)
+    doc_mime = (msg.get("document") or {}).get("mime_type") or ""
+    doc_ext = Path((msg.get("document") or {}).get("file_name") or "").suffix.lower()
+    if msg.get("photo") or doc_mime.startswith("image/") or doc_ext in stock.IMPORTABLE:
+        await _handle_upload(session, notifier, brand, msg, settings)
 
 
 # ─────────────────────────────── callback handler ────────────────────────────
@@ -1176,7 +1493,9 @@ async def process_callback(
         return
 
     # ── console buttons (/queue, /stock, /mode): state-changing, so owner-gated ──
-    if data.startswith(("con:", "gen:", "pend:", "sch:", "postnow:", "drop:", "unban:", "mode:")):
+    if data.startswith(
+        ("con:", "gen:", "pend:", "sch:", "postnow:", "drop:", "unban:", "mode:", "stk:")
+    ):
         await _console_callback(session, notifier, brand, cb, settings)
         return
 
@@ -1229,6 +1548,7 @@ async def process_callback(
         if reason == _BAN_REASON and post.status == PostStatus.REJECTED:
             await stock.ban_image(session, brand.id, post.image_ref)
             await session.commit()
+            await drive.write_back(session, brand.id, post.image_ref, drive.BANNED)
             toast = "❌ Rejected · 🚫 image banned"
 
         changed = pre_status != post.status
@@ -1323,6 +1643,9 @@ async def _console_callback(
 ) -> None:
     """``con:<cmd>`` / ``postnow:<id>`` / ``drop:<id>`` / ``unban:<ref>`` / ``mode:<…>``."""
     action, _, arg = cb.get("data", "").partition(":")
+    if action == "stk":  # the browser sends its own messages; never routed into the console card
+        await _browse_callback(session, notifier, brand, cb, arg, settings)
+        return
     notifier = _card_or_chat(notifier, cb, session, brand)
     if action == "sch":
         await _schedule_callback(session, notifier, brand, cb, arg, settings)

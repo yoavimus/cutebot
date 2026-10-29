@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import prefs
+from app import drive, prefs
 from app.config import Settings
 from app.models import Post, PostStatus
 from app.notifier.base import Notifier
@@ -116,6 +116,8 @@ async def _do_publish(
 
     await session.commit()
     await session.refresh(post)
+    if post.status == PostStatus.PUBLISHED:
+        await drive.write_back(session, post.brand_id, post.image_ref, drive.POSTED)
     return post
 
 

@@ -35,6 +35,7 @@ the index. Details of what each one changed live in those plans and in git.
 | M8 — Learning loop v1 | `app/learning.py` context in every caption, ✏️ Fix (edit = strongest signal, migration 0006), `--learning` eval flag, `/distill` brand proposals (CUT-63…67) | 2026-10-13 | `docs/archive/M8_PLAN.md` |
 | M9 — Bot console v2 | verdicts `📚 Keep` / `🤏 Almost` (+chips) / `🔁 Retry` (status `kept`, `Post.retry_of`, migration 0007), `/mode learning\|live` + `/schedule` from the bot (`settings` table, migration 0008), slash menu + HTML + inline drill-down buttons (CUT-68…71) | 2026-10-15 | `docs/archive/M9_PLAN.md` |
 | M10 — Tenant seam | `brands` table (one default row, chat id → brand), `brand_id` on posts/batches/feedback/banned_images/settings (migration 0009), brand text in the DB with `brand_text_prev` (`/distill` edits the row, `/brand`, `scripts/brand_sync.py`; `brand.md` = seed), tokens + `cost_usd` per post/batch with a `/status` cost line (migration 0010). Nothing visible changes (CUT-73…76) | 2026-10-21 (PR open; deploy pending) | `docs/archive/M10_PLAN.md` |
+| M11 — Media v2 | Telegram `document` originals + albums (one reply per album), HEIC → JPEG, SHA-256 duplicate skip, `stock_images` provenance + `brands.drive_*` (migration 0011); `/stock › Browse` thumbnail pages with 🚫 ban / 🗑 delete to `.trash` (30-day purge), volume warning on the home card; Google Drive folder sync (`/drive`, `/sync`, nightly) with `posted/` / `banned/` write-back (CUT-77…80) | 2026-10-21 (PR open; deploy pending) | `docs/archive/M11_PLAN.md` |
 
 ---
 
@@ -43,7 +44,6 @@ the index. Details of what each one changed live in those plans and in git.
 
 | # | Milestone | What ships | Size |
 |---|-----------|------------|------|
-| M11 | **Media v2** | Telegram files + albums (full quality), `/stock` paging with thumbnails + inline ban/delete, **Google Drive folder sync** (owner shares a folder with the bot's service account; nightly + `/sync`; posted/banned written back into subfolders). Google Photos only via the Picker API (`/import`, manual pick) — optional | 1 wk |
 | M12 | **Anchors (steering)** | `/idea <text>` anchors that steer an image post; opt-in calendar prompts a week ahead (`/date` for brand dates); brand-facts stock extracted from the brand text; anchors are consumables shown in `/stock`, theme cooldown doubles per use, hard ratio ceiling in the queue; anchor-steered stock image pick via cached `visual_concept` | 1 wk |
 | M13 | **Beta onboarding** | `/start` wizard for an unknown chat (name → brand voice from pasted text or 5 questions → photos → connect Instagram → schedule → starts in learning mode); per-brand IG token + refresh job. **Start the Meta review for messaging here** (weeks of lead time) | 1–2 wk |
 | M14 | **Instagram DM assistant** | three tiers from a `## DM guidelines` brand section: auto-answer only with a cited guideline line, draft-to-Telegram (✅ Send / ✏️ Fix / ❌, 24h-window countdown on the card), escalate to the owner with the thread; `Post` generalises to a reviewable item; replies feed learning like posts | 2 wk |
